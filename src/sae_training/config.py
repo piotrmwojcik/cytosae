@@ -182,8 +182,8 @@ class ViTSAERunnerConfig:
     # Data Generating Function (Model + Training Distibuion)
     custom_clip_ckpt_path: str = None
     class_token: bool = True
-    image_width: int = 224
-    image_height: int = 224
+    image_width: int = 448
+    image_height: int = 448
     model_name: str = "openai/clip-vit-base-patch32"
     module_name: str = "resid"
     block_layer: int = 10

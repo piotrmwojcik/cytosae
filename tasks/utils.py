@@ -28,6 +28,10 @@ DATASET_INFO = {
         "path": "dataset/acevedo",
         "split": "train",
     },
+    "mito": {
+        "path": "/data/pwojcik/mito_scale_resized_512_split",
+        "split": "train",
+    },
     "hehr": {
         "path": "dataset/PKG - AML-Cytomorphology_MLL_Helmholtz_v1",
         "split": "train",
@@ -213,7 +217,7 @@ def get_classnames(
     filename = json_filename if os.path.exists(json_filename) else txt_filename
 
     with open(filename, "r") as file:
-        if dataset_name in ['acevedo', 'mll23', 'matek','hehr','bmc']:
+        if dataset_name in ['acevedo', 'mll23', 'matek','hehr','bmc', 'mito']:
             class_names = [line.strip() for line in file.readlines()]
         else:
             raise ValueError(f"Dataset {dataset_name} not supported")
@@ -322,6 +326,7 @@ def load_datasets(seed: int = 1):
         "mll23": load_dataset(**DATASET_INFO['mll23']).shuffle(seed=seed),
         "acevedo": load_dataset(**DATASET_INFO['acevedo']).shuffle(seed=seed),
         "matek": load_dataset(**DATASET_INFO['matek']).shuffle(seed=seed),
+        "mito": load_dataset(**DATASET_INFO['mito']).shuffle(seed=seed),
         "bmc": load_dataset(**DATASET_INFO['bmc']).shuffle(seed=seed),
         #"hehr": load_dataset(**DATASET_INFO['hehr']).shuffle(seed=seed),
     }
