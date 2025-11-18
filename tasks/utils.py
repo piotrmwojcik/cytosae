@@ -97,6 +97,7 @@ def get_dino_bloom(modelpath="/content/dinobloom-s.pth",modelname="dinov2_vits14
     embed_sizes={"dinov2_vits14": 384,
         "dinov2_vitb14": 768,
         "dinov2_vitl14": 1024,
+        "dino_vitb16": 768,
         "dinov2_vitg14": 1536}
     # load the original DINOv2 model with the correct architecture and parameters.
     model=torch.hub.load('facebookresearch/dino:main', modelname)
