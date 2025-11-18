@@ -117,7 +117,14 @@ def get_dino_bloom(modelpath="/content/dinobloom-s.pth",modelname="dinov2_vits14
     pos_embed = torch.nn.Parameter(torch.zeros(1, 197, embed_sizes[modelname]))
     model.pos_embed = pos_embed
 
-    model.load_state_dict(new_state_dict, strict=True)
+    incompatible = model.load_state_dict(new_state_dict, strict=False)
+    print("Missing keys:")
+    for k in incompatible.missing_keys:
+        print("  ", k)
+
+    print("\nUnexpected keys:")
+    for k in incompatible.unexpected_keys:
+        print("  ", k)
     return model
 
 def get_sae_and_vit(
