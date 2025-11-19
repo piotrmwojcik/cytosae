@@ -370,7 +370,7 @@ class SAETester(VisualizeMixin, UtilMixin):
                 self.datasets[dataset_name],
                 self.max_act_images[dataset_name],
             )
-            print('!!!! ', labes)
+            print('!!!! ', labels)
             print(images)
             if show_seg_mask:
                 images = [
