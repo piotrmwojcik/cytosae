@@ -370,7 +370,8 @@ class SAETester(VisualizeMixin, UtilMixin):
                 self.datasets[dataset_name],
                 self.max_act_images[dataset_name],
             )
-
+            print('!!!! ', labes)
+            print(images)
             if show_seg_mask:
                 images = [
                     self.get_segmentation_mask(img, neuron_idx)
