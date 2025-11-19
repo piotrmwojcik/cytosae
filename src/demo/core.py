@@ -364,14 +364,13 @@ class SAETester(VisualizeMixin, UtilMixin):
     def get_top_images(self, neuron_idx: int, top_k=5, show_seg_mask=False):
         out_top_images = []
         for dataset_name in self.max_act_images.keys():
-
             images, labels = self._get_max_activating_images_and_labels(
                 neuron_idx,
                 self.datasets[dataset_name],
                 self.max_act_images[dataset_name],
             )
             print('!!!! ', labels)
-            print(images)
+            print('!!! im !!', images)
             if show_seg_mask:
                 images = [
                     self.get_segmentation_mask(img, neuron_idx)
