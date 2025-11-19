@@ -25,8 +25,8 @@ def load_sae_tester(sae_path):
         sae_path=sae_path,
         vit_type="custom",
         device="cpu",
-        backbone="dinov2_vitb14",
-        model_path="./DinoBloom-B.pth",
+        backbone="dino_vitb16",
+        model_path="./dino_vitbase16_pretrain_full_checkpoint.pth",
         classnames=classnames["wbc"],
     )
     sae_clip = SAETester(vit, cfg, sae, mean_acts, max_act_imgs, datasets, classnames)

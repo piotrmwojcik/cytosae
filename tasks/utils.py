@@ -323,11 +323,7 @@ def load_datasets(seed: int = 1):
 def load_datasets(seed: int = 1):
     """Load multiple datasets from HuggingFace."""
     return {
-        "mll23": load_dataset(**DATASET_INFO['mll23']).shuffle(seed=seed),
-        "acevedo": load_dataset(**DATASET_INFO['acevedo']).shuffle(seed=seed),
-        "matek": load_dataset(**DATASET_INFO['matek']).shuffle(seed=seed),
         "mito": load_dataset(**DATASET_INFO['mito']).shuffle(seed=seed),
-        "bmc": load_dataset(**DATASET_INFO['bmc']).shuffle(seed=seed),
         #"hehr": load_dataset(**DATASET_INFO['hehr']).shuffle(seed=seed),
     }
 
