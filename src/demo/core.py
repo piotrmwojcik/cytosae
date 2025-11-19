@@ -21,11 +21,13 @@ class UtilMixin:
         for i in img_list:
             try:
                 images.append(dataset[i.item()]["image"])
+                print(dataset[i.item()]["image"])
                 labels.append(dataset[i.item()]["label"])
             except Exception as e:
                 #images.append(dataset[i.item()]["jpg"])
                 #labels.append(dataset[i.item()]["cls"])
                 images.append(dataset[i.item()]["image"])
+                print(dataset[i.item()]["image"])
                 labels.append(0)
         return images, labels
 
