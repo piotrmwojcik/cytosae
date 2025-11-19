@@ -17,6 +17,7 @@ class UtilMixin:
         img_list = max_activating_image_indices[neuron_idx]
         images = []
         labels = []
+        print(img_list)
         for i in img_list:
             try:
                 images.append(dataset[i.item()]["image"])
