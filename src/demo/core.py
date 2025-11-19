@@ -458,7 +458,7 @@ class SAETester(VisualizeMixin, UtilMixin):
 
     def _filter_out_nosiy_activation(self, features):
         noisy_features_indices = (
-            (self.mean_acts["mll23"] > self.noisy_threshold).nonzero()[0].tolist()
+            (self.mean_acts["mito"] > self.noisy_threshold).nonzero()[0].tolist()
         )
         features_copy = deepcopy(features)
         if len(features_copy.shape) == 1:
