@@ -161,7 +161,7 @@ def main(
     dataset_name: str,
     root_dir: str,
     save_name: str,
-    backbone: str = "dinov2_vitb14",
+    backbone: str = "dino_vitb16",
     number_of_max_activating_images: int = 10,
     seed: int = 1,
     batch_size: int = 8,
