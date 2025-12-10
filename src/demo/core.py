@@ -20,40 +20,37 @@ class UtilMixin:
         print(img_list)
         for i in img_list:
             try:
-                images.append(dataset[i.item()]["image"])
-                print(dataset[i.item()]["image"])
+                img = dataset[i.item()]["image"]
+                print(img)
+                images.append(img)
                 labels.append(dataset[i.item()]["label"])
             except Exception as e:
-                #images.append(dataset[i.item()]["jpg"])
-                #labels.append(dataset[i.item()]["cls"])
-                images.append(dataset[i.item()]["image"])
-                print(dataset[i.item()]["image"])
+                img = dataset[i.item()]["image"]
+                print(img)
+                images.append(img)
                 labels.append(0)
         return images, labels
 
     def _create_patches(self, patch=256):
-        #temp = self.processed_image["pixel_values"].clone()
-        temp = self.processed_image.clone()
-        patches = temp[0].data.unfold(0, 3, 3)
-        patches = patches.unfold(1, patch, patch)
-        patches = patches.unfold(2, patch, patch)
-        return patches
+        temp = self.processed_image.clone()  # [1, C, H, W]
+        patches = temp[0].data.unfold(1, patch, patch)  # unfold height
+        patches = patches.unfold(2, patch, patch)       # unfold width
+        return patches  # shape: [C, n_h, n_w, patch, patch]
 
 
 class VisualizeMixin:
     def _plot_input_image(self, save=True):
-        plt.imshow(self.input_image)
+        plt.imshow(self.input_image)  # always RGB now
         if save:
-            # Use the image URL (or its basename) to construct a filename.
             img_name = os.path.basename(self.img_url).split(".")[0]
             save_name = f"{self.save_dir}/{img_name}/input_image.png"
             os.makedirs(os.path.dirname(save_name), exist_ok=True)
-            plt.savefig(save_name, bbox_inches="tight",dpi=300)
+            plt.savefig(save_name, bbox_inches="tight", dpi=300)
             plt.show()
             plt.close()
         else:
             plt.show()
-            
+
     def _plot_feature_mask(self, patches, feat_idx, mask=None, plot=True, save=True):
         if mask is None:
             mask = self.sae_act[0, :, feat_idx].cpu()
@@ -78,13 +75,13 @@ class VisualizeMixin:
             img_name = os.path.basename(self.img_url).split(".")[0]
             save_name = f"{self.save_dir}/{img_name}/feature_masks/{feat_idx}.png"
             os.makedirs(os.path.dirname(save_name), exist_ok=True)
-            fig.savefig(save_name,dpi=300)
+            fig.savefig(save_name, dpi=300)
             plt.close(fig)
         else:
             plt.close(fig)
         return fig
 
-    def _plot_patches(self, patches, highlight_patch_idx=None,save=True):
+    def _plot_patches(self, patches, highlight_patch_idx=None, save=True):
         fig, axs = plt.subplots(patches.size(1), patches.size(2), figsize=(6, 6))
         plt.subplots_adjust(wspace=0.01, hspace=0.01)
         for i in range(patches.size(1)):
@@ -105,7 +102,7 @@ class VisualizeMixin:
             img_name = os.path.basename(self.img_url).split(".")[0]
             save_name = f"{self.save_dir}/{img_name}/patches.png"
             os.makedirs(os.path.dirname(save_name), exist_ok=True)
-            plt.savefig(save_name, bbox_inches="tight",dpi=300)
+            plt.savefig(save_name, bbox_inches="tight", dpi=300)
             plt.show()
             plt.close(fig)
         else:
@@ -126,11 +123,10 @@ class VisualizeMixin:
             markersize=5,
         )
 
-        # Annotate feature indices
         for idx in union_top_neurons:
             plt.text(
                 idx, token_act[idx] + 0.05, str(idx), fontsize=9, ha="center"
-            )  # Adjust the 0.05 value as needed for spacing
+            )
 
         plt.legend()
         plt.title(f"token {token_idx} activation")
@@ -139,7 +135,7 @@ class VisualizeMixin:
             img_name = os.path.basename(self.img_url).replace(".jpg", "")
             save_name = f"{self.save_dir}/{img_name}/activation/{token_idx}.jpg"
             os.makedirs(os.path.dirname(save_name), exist_ok=True)
-            plt.savefig(save_name,dpi=300)
+            plt.savefig(save_name, dpi=300)
             plt.show()
 
         plt.close()
@@ -154,23 +150,32 @@ class VisualizeMixin:
         top_k=5,
         save=True,
     ):
-        images = [img.resize((224, 224)) for img in images]
+        # NEW: ensure RGB + resize to 448x448 for display
+        processed_images = []
+        for img in images[:top_k]:
+            if isinstance(img, Image.Image):
+                if img.mode != "RGB":        # fix grayscale display
+                    img = img.convert("RGB")
+                img = img.resize((448, 448), Image.BICUBIC)
+            else:
+                arr = np.array(img)
+                if arr.ndim == 2:             # grayscale numpy -> RGB
+                    arr = np.stack([arr] * 3, axis=-1)
+                img = Image.fromarray(arr).resize((448, 448), Image.BICUBIC)
+            processed_images.append(img)
+
+        images = processed_images
+
         num_cols = min(top_k, 5)
         num_rows = (top_k + num_cols - 1) // num_cols
         fig, axes = plt.subplots(
             num_rows, num_cols, figsize=(4.5 * num_cols, 5 * num_rows)
         )
-        axes = axes.flatten()  # Flatten the 2D array of axes
+        axes = axes.flatten()
 
         for i in range(top_k):
-            axes[i].imshow(images[i])  # Display the image
-            axes[i].axis("off")  # Hide axes
-            ''' # TODO
-            if labels is not None:
-                class_name = self.class_names[dataset_name][int(labels[i])]
-                axes[i].set_title(f"{labels[i]} {class_name}", fontsize=25)
-            '''
-        # plt.suptitle(suptitle)
+            axes[i].imshow(images[i])
+            axes[i].axis("off")
         plt.tight_layout()
 
         if save:
@@ -179,10 +184,9 @@ class VisualizeMixin:
                 f"{self.save_dir}/{img_name}/top_images/{dataset_name}/{neuron_idx}.jpg"
             )
             os.makedirs(os.path.dirname(save_name), exist_ok=True)
-            plt.savefig(save_name,dpi=300)
+            plt.savefig(save_name, dpi=300)
 
         plt.close()
-
         return fig
 
     def _fig_to_img(self, fig):
@@ -193,13 +197,11 @@ class VisualizeMixin:
         return img
 
     def _plot_multiple_images(self, figs, neuron_idx, top_k=5, save=True, seg=False):
-
-        # Create a new figure to hold all subplots
         num_plots = len(figs)
-        cols = 1  # Number of columns in the subplot grid
-        rows = (num_plots + cols - 1) // cols  # Calculate rows required
+        cols = 1
+        rows = (num_plots + cols - 1) // cols
 
-        combined_fig = plt.figure(figsize=(20, 12))  # Adjust figsize as needed
+        combined_fig = plt.figure(figsize=(20, 12))
 
         for i, fig in enumerate(figs):
             ax = combined_fig.add_subplot(rows, cols, i + 1)
@@ -214,10 +216,9 @@ class VisualizeMixin:
             else:
                 save_name = f"{self.save_dir}/{img_name}/top_images/{neuron_idx}.jpg"
             os.makedirs(os.path.dirname(save_name), exist_ok=True)
-            plt.savefig(save_name,dpi=300)
+            plt.savefig(save_name, dpi=300)
 
         combined_fig.show()
-        # plt.close(combined_fig)
 
 
 class SAETester(VisualizeMixin, UtilMixin):
@@ -251,18 +252,19 @@ class SAETester(VisualizeMixin, UtilMixin):
             image = self._load_image(img_url)
         else:
             image = img_url
-        self.input_image = image
-        self.img_url = img_url
-        '''
-        self.processed_image = self.vit.processor(
-            images=image, text="", return_tensors="pt", padding=True
-        )
-        '''
+
+        # NEW: ensure RGB + resize to 448x448 for ViT & display
         if image.mode != "RGB":
             image = image.convert("RGB")
-        processed = self.vit.processor(image)
-        #self.processed_image = {"pixel_values": processed.unsqueeze(0)}
-        self.processed_image = processed.unsqueeze(0)
+        if image.size != (448, 448):
+            image = image.resize((448, 448), Image.BICUBIC)
+
+        self.input_image = image
+        self.img_url = img_url
+
+        # processor expected to handle already-resized RGB image
+        processed = self.vit.processor(image)  # assume returns [C, H, W]
+        self.processed_image = processed.unsqueeze(0)  # [1, C, H, W]
 
     def _load_image(self, img_url: str) -> Image.Image:
         """Helper method to load image from URL or local path."""
@@ -288,13 +290,12 @@ class SAETester(VisualizeMixin, UtilMixin):
     def input_image(self, value):
         self._input_image = value
 
-    def show_input_image(self,save=True):
+    def show_input_image(self, save=True):
         self._plot_input_image(save=save)
 
     def run(
-        self, highlight_patch_idx, patch_size=14, top_k=5, num_images=5, seg_mask=True, save=True
+        self, highlight_patch_idx, patch_size=16, top_k=5, num_images=5, seg_mask=True, save=True
     ):
-        # idx = 0 is cls token
         self.show_patches(
             highlight_patch_idx=highlight_patch_idx - 1, patch_size=patch_size, save=save
         )
@@ -302,25 +303,28 @@ class SAETester(VisualizeMixin, UtilMixin):
         self.show_ref_images_of_neuron_indices(
             top_neurons, top_k=num_images, seg_mask=True, save=save
         )
-        
+
     def show_patches(self, highlight_patch_idx=None, patch_size=14, save=True):
         if not hasattr(self, "input_image"):
             assert not hasattr(self, "input_image"), "register image first"
 
         patches = self._create_patches(patch=patch_size)
-        self._plot_patches(patches.cpu().data, highlight_patch_idx=highlight_patch_idx,save=save)
+        self._plot_patches(patches.cpu().data, highlight_patch_idx=highlight_patch_idx, save=save)
 
     def show_segmentation_mask(self, feat_idx, patch_size=14, mask=None, plot=True, save=True):
         patches = self._create_patches(patch=patch_size)
         fig = self._plot_feature_mask(
-            patches.cpu().data, feat_idx, mask=None, plot=plot,save=save
+            patches.cpu().data, feat_idx, mask=None, plot=plot, save=save
         )
         return fig
 
     def get_segmentation_mask(self, image, feat_idx: int):
 
-        if image.mode == "L":
+        # NEW: keep the same normalization: RGB + 448x448
+        if image.mode != "RGB":
             image = image.convert("RGB")
+        if image.size != (448, 448):
+            image = image.resize((448, 448), Image.BICUBIC)
 
         vit_act = self._run_vit_hook(image)
         sae_act = self._run_sae_hook(vit_act)
@@ -328,15 +332,18 @@ class SAETester(VisualizeMixin, UtilMixin):
         filtered_mean_act = self._filter_out_nosiy_activation(token_act)
 
         temp = filtered_mean_act[:, feat_idx]
-
         print('!!!! ', temp.shape)
-        if temp.shape[0]%14==0:
-            mask = torch.Tensor(temp[:,].reshape(14, 14)).view(1, 1, 14, 14)
-        else:
-            mask = torch.Tensor(temp[1:,].reshape(14, 14)).view(1, 1, 14, 14)
-        mask = torch.nn.functional.interpolate(mask, (image.height, image.width))[0][
-            0
-        ].numpy()
+
+        num_patches = temp.shape[0]
+        grid = int(np.sqrt(num_patches))
+        if grid * grid != num_patches:
+            # if CLS token present, drop it
+            num_patches = num_patches - 1
+            grid = int(np.sqrt(num_patches))
+            temp = temp[1:]
+
+        mask = torch.Tensor(temp.reshape(grid, grid)).view(1, 1, grid, grid)
+        mask = torch.nn.functional.interpolate(mask, (image.height, image.width))[0][0].numpy()
         mask = (mask - mask.min()) / (mask.max() - mask.min() + 1e-10)
 
         base_opacity = 30
@@ -346,7 +353,7 @@ class SAETester(VisualizeMixin, UtilMixin):
 
         darkened_image = (image_array[..., :3] * (base_opacity / 255)).astype(np.uint8)
         rgba_overlay[mask == 0, :3] = darkened_image[mask == 0]
-        rgba_overlay[..., 3] = 255  # Fully opaque
+        rgba_overlay[..., 3] = 255
 
         return Image.fromarray(rgba_overlay)
 
@@ -396,15 +403,14 @@ class SAETester(VisualizeMixin, UtilMixin):
         self, neuron_indices: list[int], top_k=5, save=False, seg_mask=False
     ):
         out_top_images = []
-        
         for neuron_idx in neuron_indices:
             figs = self.get_top_images(neuron_idx, top_k=top_k, show_seg_mask=False)
             self._plot_multiple_images(figs, neuron_indices, top_k=top_k, save=True)
-            
+
             if seg_mask:
                 figs = self.get_top_images(neuron_idx, top_k=top_k, show_seg_mask=True)
-                self._plot_multiple_images(figs, neuron_indices, top_k=top_k, save=True,seg=True)
-            
+                self._plot_multiple_images(figs, neuron_indices, top_k=top_k, save=True, seg=True)
+
     def get_activation_distribution(self):
 
         vit_act = self._run_vit_hook()
@@ -430,7 +436,7 @@ class SAETester(VisualizeMixin, UtilMixin):
     def _get_token_acts_and_top_neurons(self, token_idx, top_k=5):
 
         vit_act = self._run_vit_hook()
-        sae_act = self._run_sae_hook(vit_act) #[B,patch_number, dSAE]
+        sae_act = self._run_sae_hook(vit_act)  # [B, patch_number, dSAE]
 
         token_act = sae_act[0, token_idx, :].detach().cpu().numpy()
         filtered_mean_act = self._filter_out_nosiy_activation(token_act)
@@ -439,14 +445,17 @@ class SAETester(VisualizeMixin, UtilMixin):
         return token_act, top_neurons, sae_act
 
     def _run_vit_hook(self, image=None):
-        
+
         if image is None:
             inputs = self.processed_image.to(self.device)
         else:
+            # NEW: keep consistent: RGB + 448x448
             if image.mode != "RGB":
                 image = image.convert("RGB")
+            if image.size != (448, 448):
+                image = image.resize((448, 448), Image.BICUBIC)
             inputs = self.vit.processor(image).unsqueeze(0).to(self.device)
-        
+
         list_of_hook_locations = [(self.cfg.block_layer, self.cfg.module_name)]
         vit_out, vit_cache_dict = self.vit.run_with_cache(
             list_of_hook_locations, inputs
@@ -459,7 +468,7 @@ class SAETester(VisualizeMixin, UtilMixin):
         sae_act = sae_cache_dict["hook_hidden_post"]
         if sae_act.shape[0] != 1:
             sae_act = sae_act.permute(1, 0, 2)
-        return sae_act[:,1:257, :]
+        return sae_act[:, 1:257, :]
 
     def _filter_out_nosiy_activation(self, features):
         noisy_features_indices = (
