@@ -207,6 +207,10 @@ class SAETester(VisualizeMixin, UtilMixin):
     #                       IMAGE LOADING
     # -------------------------------------------------------------
 
+    def show_input_image(self, save=True):
+        """Show (and optionally save) the currently registered input image."""
+        self._plot_input_image(save=save)
+
     def register_image(self, img_url: str):
         if isinstance(img_url, str):
             image = self._load_image(img_url)
