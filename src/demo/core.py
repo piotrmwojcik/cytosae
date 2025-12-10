@@ -207,6 +207,46 @@ class SAETester(VisualizeMixin, UtilMixin):
     #                       IMAGE LOADING
     # -------------------------------------------------------------
 
+    def run(
+        self,
+        highlight_patch_idx,
+        patch_size=16,
+        top_k=5,
+        num_images=5,
+        seg_mask=True,
+        save=True,
+    ):
+        """
+        Full workflow:
+        1) Show patch grid with highlighted patch
+        2) Extract top_k highest-activating SAE neurons for that patch
+        3) Show reference images that maximally activate each neuron
+        4) Optionally show segmentation masks
+        """
+
+        # 1. Show patch grid
+        self.show_patches(
+            highlight_patch_idx=highlight_patch_idx - 1,  # subtract 1 because CLS=0
+            patch_size=patch_size,
+            save=save,
+        )
+
+        # 2. Top neurons for the selected patch token
+        top_neurons = self.get_top_neurons(
+            highlight_patch_idx,
+            top_k=top_k,
+            save=save,
+        )
+
+        # 3–4. Show images and (optionally) segmentation masks
+        self.show_ref_images_of_neuron_indices(
+            top_neurons,
+            top_k=num_images,
+            seg_mask=seg_mask,
+            save=save,
+        )
+
+
     def show_input_image(self, save=True):
         """Show (and optionally save) the currently registered input image."""
         self._plot_input_image(save=save)
