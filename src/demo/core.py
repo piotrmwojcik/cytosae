@@ -328,6 +328,8 @@ class SAETester(VisualizeMixin, UtilMixin):
         filtered_mean_act = self._filter_out_nosiy_activation(token_act)
 
         temp = filtered_mean_act[:, feat_idx]
+
+        print('!!!! ', temp.shape)
         if temp.shape[0]%16==0:
             mask = torch.Tensor(temp[:,].reshape(16, 16)).view(1, 1, 16, 16)
         else:
