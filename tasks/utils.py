@@ -121,8 +121,8 @@ def get_dino_bloom(modelpath="/content/dinobloom-s.pth",modelname="dinov2_vits14
             new_state_dict[new_key] = value
 
     #corresponds to 224x224 image. patch size=14x14 => 16*16 patches
-    pos_embed = torch.nn.Parameter(torch.zeros(1, 197, embed_sizes[modelname]))
-    model.pos_embed = pos_embed
+    #pos_embed = torch.nn.Parameter(torch.zeros(1, 197, embed_sizes[modelname]))
+    #model.pos_embed = pos_embed
 
     incompatible = model.load_state_dict(new_state_dict, strict=False)
     print("Missing keys:")
