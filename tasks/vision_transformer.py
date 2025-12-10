@@ -21,7 +21,10 @@ from functools import partial
 import torch
 import torch.nn as nn
 
-from utils import trunc_normal_
+
+def trunc_normal_(tensor, mean=0., std=1., a=-2., b=2.):
+    # type: (Tensor, float, float, float, float) -> Tensor
+    return _no_grad_trunc_normal_(tensor, mean, std, a, b)
 
 
 def drop_path(x, drop_prob: float = 0., training: bool = False):

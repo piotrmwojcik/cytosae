@@ -46,11 +46,6 @@ DATASET_INFO = {
 SAE_DIM = 49152 # 768*64 [vit_dimension * expansion_factor]
 
 
-def trunc_normal_(tensor, mean=0., std=1., a=-2., b=2.):
-    # type: (Tensor, float, float, float, float) -> Tensor
-    return _no_grad_trunc_normal_(tensor, mean, std, a, b)
-
-
 def load_sae(sae_path: str, device: str) -> tuple[SparseAutoencoder, Config]:
     """Load a sparse autoencoder model from a checkpoint file."""
     checkpoint = torch.load(sae_path, map_location="cpu", weights_only=False)
