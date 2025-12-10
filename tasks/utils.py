@@ -30,7 +30,7 @@ DATASET_INFO = {
         "split": "train",
     },
     "mito": {
-        "path": "/data/pwojcik/mito_scale_resized_512_split",
+        "path": "/data/pwojcik/mito_work/dataset_512/",
         "split": "train",
     },
     "hehr": {
