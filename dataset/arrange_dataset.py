@@ -7,7 +7,7 @@ import argparse
 from tqdm import tqdm
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_name', required=True, choices=['acevedo', 'bmc', 'matek'])
+parser.add_argument('--data_name', required=True, choices=['acevedo', 'mito', 'bmc', 'matek'])
 args = parser.parse_args() 
 
 # arrange acevedo

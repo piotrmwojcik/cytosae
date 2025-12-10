@@ -7,6 +7,7 @@ from PIL import Image
 
 import torch
 import torchvision.transforms as T
+from vision_transformer import vit_tiny
 from datasets import Dataset, load_dataset
 
 from src.models.utils import get_adapted_clip, get_base_clip
@@ -43,6 +44,11 @@ DATASET_INFO = {
 }
 
 SAE_DIM = 49152 # 768*64 [vit_dimension * expansion_factor]
+
+
+def trunc_normal_(tensor, mean=0., std=1., a=-2., b=2.):
+    # type: (Tensor, float, float, float, float) -> Tensor
+    return _no_grad_trunc_normal_(tensor, mean, std, a, b)
 
 
 def load_sae(sae_path: str, device: str) -> tuple[SparseAutoencoder, Config]:
@@ -101,10 +107,12 @@ def get_dino_bloom(modelpath="/content/dinobloom-s.pth",modelname="dinov2_vits14
     embed_sizes={"dinov2_vits14": 384,
         "dinov2_vitb14": 768,
         "dinov2_vitl14": 1024,
+        "dino_vitt16": 192,
         "dino_vitb16": 768,
         "dinov2_vitg14": 1536}
     # load the original DINOv2 model with the correct architecture and parameters.
-    model=torch.hub.load('facebookresearch/dino:main', modelname)
+    model = vit_tiny(patch_size=16)
+    #model=torch.hub.load('facebookresearch/dino:main', modelname)
     # load finetuned weights
     pretrained = torch.load(modelpath, map_location=torch.device('cpu'))
     # make correct state dict for loading
