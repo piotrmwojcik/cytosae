@@ -330,10 +330,10 @@ class SAETester(VisualizeMixin, UtilMixin):
         temp = filtered_mean_act[:, feat_idx]
 
         print('!!!! ', temp.shape)
-        if temp.shape[0]%16==0:
-            mask = torch.Tensor(temp[:,].reshape(16, 16)).view(1, 1, 16, 16)
+        if temp.shape[0]%14==0:
+            mask = torch.Tensor(temp[:,].reshape(14, 14)).view(1, 1, 14, 14)
         else:
-            mask = torch.Tensor(temp[1:,].reshape(16, 16)).view(1, 1, 16, 16)
+            mask = torch.Tensor(temp[1:,].reshape(14, 14)).view(1, 1, 14, 14)
         mask = torch.nn.functional.interpolate(mask, (image.height, image.width))[0][
             0
         ].numpy()
