@@ -7,7 +7,7 @@ from PIL import Image
 
 import torch
 import torchvision.transforms as T
-from vision_transformer import vit_tiny
+from .vision_transformer import vit_tiny
 from datasets import Dataset, load_dataset
 
 from src.models.utils import get_adapted_clip, get_base_clip
