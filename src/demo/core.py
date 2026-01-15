@@ -265,12 +265,19 @@ class SAETester(VisualizeMixin, UtilMixin):
         self.processed_image = processed.unsqueeze(0)
 
     def _load_image(self, img_url: str) -> Image.Image:
-        """Helper method to load image from URL or local path."""
+        """Helper method to load image from URL or local path and resize to 224x224."""
         if "https" in img_url:
             response = requests.get(img_url)
             response.raise_for_status()
-            return Image.open(BytesIO(response.content))
-        return Image.open(img_url)
+            img = Image.open(BytesIO(response.content))
+        else:
+            img = Image.open(img_url)
+
+        # ensure consistent mode (important for ViT)
+        img = img.convert("RGB")
+        img = img.resize((224, 224), resample=Image.BICUBIC)
+
+        return img
 
     @property
     def processed_image(self):
