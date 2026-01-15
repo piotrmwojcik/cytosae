@@ -106,8 +106,8 @@ def get_dino_bloom(modelpath="/content/dinobloom-s.pth",modelname="dinov2_vits14
         "dino_vitb16": 768,
         "dinov2_vitg14": 1536}
     # load the original DINOv2 model with the correct architecture and parameters.
-    model = vit_tiny(patch_size=16)
-    #model=torch.hub.load('facebookresearch/dino:main', modelname)
+    #model = vit_tiny(patch_size=16)
+    model=torch.hub.load('facebookresearch/dino:main', modelname)
     # load finetuned weights
     pretrained = torch.load(modelpath, map_location=torch.device('cpu'))
     # make correct state dict for loading
@@ -120,9 +120,8 @@ def get_dino_bloom(modelpath="/content/dinobloom-s.pth",modelname="dinov2_vits14
             new_key = key.replace('backbone.', '')
             new_state_dict[new_key] = value
 
-    #corresponds to 224x224 image. patch size=14x14 => 16*16 patches
-    #pos_embed = torch.nn.Parameter(torch.zeros(1, 197, embed_sizes[modelname]))
-    #model.pos_embed = pos_embed
+    pos_embed = torch.nn.Parameter(torch.zeros(1, 257, embed_sizes[modelname]))
+    model.pos_embed = pos_embed
 
     incompatible = model.load_state_dict(new_state_dict, strict=False)
     print("Missing keys:")
