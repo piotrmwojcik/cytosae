@@ -107,30 +107,31 @@ def get_dino_bloom(modelpath="/content/dinobloom-s.pth",modelname="dinov2_vits14
         "dinov2_vitg14": 1536}
     # load the original DINOv2 model with the correct architecture and parameters.
     #model = vit_tiny(patch_size=16)
-    model=torch.hub.load('facebookresearch/dino:main', modelname)
-    # load finetuned weights
-    pretrained = torch.load(modelpath, map_location=torch.device('cpu'))
-    # make correct state dict for loading
+    # load standard DINO ViT-B/16
+    model = torch.hub.load("facebookresearch/dino:main", modelname)
+
+    # load checkpoint
+    pretrained = torch.load(modelpath, map_location="cpu")
+
+    # build compatible state dict
     new_state_dict = {}
-    #for key, value in pretrained.items():
-    for key, value in pretrained['teacher'].items():
-        if 'dino_head' in key or "ibot_head" in key:
-            pass
-        else:
-            new_key = key.replace('backbone.', '')
-            new_state_dict[new_key] = value
+    for key, value in pretrained["teacher"].items():
+        if "dino_head" in key or "ibot_head" in key:
+            continue
+        new_key = key.replace("backbone.", "")
+        new_state_dict[new_key] = value
 
-    pos_embed = torch.nn.Parameter(torch.zeros(1, 257, embed_sizes[modelname]))
-    model.pos_embed = pos_embed
-
+    # load weights (pos_embed now matches: [1, 197, 768])
     incompatible = model.load_state_dict(new_state_dict, strict=False)
+
     print("Missing keys:")
     for k in incompatible.missing_keys:
-        print("  ", k)
+        print(" ", k)
 
     print("\nUnexpected keys:")
     for k in incompatible.unexpected_keys:
-        print("  ", k)
+        print(" ", k)
+
     return model
 
 def get_sae_and_vit(
