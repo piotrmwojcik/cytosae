@@ -10,129 +10,179 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 from PIL import Image
 
 
-# =====================================================================
-#                               UTIL MIXIN
-# =====================================================================
-
 class UtilMixin:
     def _get_max_activating_images_and_labels(
-        self, neuron_idx, dataset, max_activating_image_indices
+            self, neuron_idx, dataset, max_activating_image_indices
     ):
         img_list = max_activating_image_indices[neuron_idx]
-        images, labels = [], []
-
+        images = []
+        labels = []
+        print(img_list)
         for i in img_list:
             try:
-                sample = dataset[i.item()]
-                images.append(sample["image"])
-                labels.append(sample.get("label", 0))
-            except:
                 images.append(dataset[i.item()]["image"])
+                print(dataset[i.item()]["image"])
+                labels.append(dataset[i.item()]["label"])
+            except Exception as e:
+                # images.append(dataset[i.item()]["jpg"])
+                # labels.append(dataset[i.item()]["cls"])
+                images.append(dataset[i.item()]["image"])
+                print(dataset[i.item()]["image"])
                 labels.append(0)
         return images, labels
 
-    # -------------------------------------------------------------
-    #               CORRECT PATCH EXTRACTION FOR VIT
-    # -------------------------------------------------------------
-    def _create_patches(self, patch=16):
-        """
-        Extract non-overlapping patches from a 448×448 processed image.
-
-        Input: self.processed_image → [1, C, H, W]
-        Output: patches → [1, n_h, n_w, C, patch, patch]
-        """
-        temp = self.processed_image  # [1, C, H, W]
-        assert temp.dim() == 4, f"Expected [B,C,H,W], got {temp.shape}"
-        B, C, H, W = temp.shape
-        assert B == 1
-
-        assert H % patch == 0 and W % patch == 0, \
-            f"Image size ({H},{W}) not divisible by patch {patch}"
-
-        # unfold over H
-        patches = temp.unfold(2, patch, patch)      # [1,C,n_h,patch,W]
-        # unfold over W
-        patches = patches.unfold(3, patch, patch)   # [1,C,n_h,patch,n_w,patch]
-
-        # reorder → [1,n_h,n_w,C,patch,patch]
-        patches = patches.permute(0, 2, 4, 1, 3, 5).contiguous()
+    def _create_patches(self, patch=256):
+        # temp = self.processed_image["pixel_values"].clone()
+        temp = self.processed_image.clone()
+        patches = temp[0].data.unfold(0, 3, 3)
+        patches = patches.unfold(1, patch, patch)
+        patches = patches.unfold(2, patch, patch)
         return patches
 
 
-# =====================================================================
-#                           VISUALIZATION MIXIN
-# =====================================================================
-
 class VisualizeMixin:
-
     def _plot_input_image(self, save=True):
         plt.imshow(self.input_image)
-        plt.axis("off")
         if save:
+            # Use the image URL (or its basename) to construct a filename.
             img_name = os.path.basename(self.img_url).split(".")[0]
             save_name = f"{self.save_dir}/{img_name}/input_image.png"
             os.makedirs(os.path.dirname(save_name), exist_ok=True)
             plt.savefig(save_name, bbox_inches="tight", dpi=300)
-        plt.close()
-
-    def _plot_patches(self, patches, highlight_patch_idx=None, save=True):
-        n_h = patches.size(1)
-        n_w = patches.size(2)
-
-        fig, axs = plt.subplots(n_h, n_w, figsize=(6, 6))
-        plt.subplots_adjust(wspace=0.01, hspace=0.01)
-
-        for i in range(n_h):
-            for j in range(n_w):
-                patch = patches[0, i, j]  # [C, patch, patch]
-                patch = patch.permute(1, 2, 0).cpu().numpy()  # → HWC
-                axs[i, j].imshow(patch)
-                axs[i, j].axis("off")
-
-                if highlight_patch_idx == i * n_w + j:
-                    for spine in axs[i, j].spines.values():
-                        spine.set_edgecolor("red")
-                        spine.set_linewidth(3)
-
-        if save:
-            img_name = os.path.basename(self.img_url).split(".")[0]
-            save_name = f"{self.save_dir}/{img_name}/patches.png"
-            os.makedirs(os.path.dirname(save_name), exist_ok=True)
-            plt.savefig(save_name, dpi=300)
-
-        plt.close(fig)
+            plt.show()
+            plt.close()
+        else:
+            plt.show()
 
     def _plot_feature_mask(self, patches, feat_idx, mask=None, plot=True, save=True):
         if mask is None:
             mask = self.sae_act[0, :, feat_idx].cpu()
 
-        n_h = patches.size(1)
-        n_w = patches.size(2)
-
-        fig, axs = plt.subplots(n_h, n_w, figsize=(6, 6))
+        fig, axs = plt.subplots(patches.size(1), patches.size(2), figsize=(6, 6))
         plt.subplots_adjust(wspace=0.01, hspace=0.01)
 
-        for i in range(n_h):
-            for j in range(n_w):
+        for i in range(patches.size(1)):
+            for j in range(patches.size(2)):
                 patch = patches[0, i, j].permute(1, 2, 0)
-                patch = patch.cpu().numpy()
-
-                m = mask[i * n_w + j + 1].item()
-                masked_patch = patch * m
+                patch *= torch.tensor(self.vit.processor.image_processor.image_std)
+                patch += torch.tensor(self.vit.processor.image_processor.image_mean)
+                masked_patch = patch * mask[i * patches.size(2) + j + 1]
                 masked_patch = (masked_patch - masked_patch.min()) / (
-                    masked_patch.max() - masked_patch.min() + 1e-8
+                        masked_patch.max() - masked_patch.min() + 1e-8
                 )
-
                 axs[i, j].imshow(masked_patch)
                 axs[i, j].axis("off")
 
+        fig.suptitle(feat_idx)
         if save:
             img_name = os.path.basename(self.img_url).split(".")[0]
             save_name = f"{self.save_dir}/{img_name}/feature_masks/{feat_idx}.png"
             os.makedirs(os.path.dirname(save_name), exist_ok=True)
             fig.savefig(save_name, dpi=300)
+            plt.close(fig)
+        else:
+            plt.close(fig)
+        return fig
 
-        plt.close(fig)
+    def _plot_patches(self, patches, highlight_patch_idx=None, save=True):
+        fig, axs = plt.subplots(patches.size(1), patches.size(2), figsize=(6, 6))
+        plt.subplots_adjust(wspace=0.01, hspace=0.01)
+        for i in range(patches.size(1)):
+            for j in range(patches.size(2)):
+                patch = patches[0, i, j].permute(1, 2, 0)
+                patch *= torch.tensor(self.vit.processor.image_processor.image_std)
+                patch += torch.tensor(self.vit.processor.image_processor.image_mean)
+                axs[i, j].imshow(patch)
+                if i * patches.size(2) + j == highlight_patch_idx:
+                    for spine in axs[i, j].spines.values():
+                        spine.set_edgecolor("red")
+                        spine.set_linewidth(3)
+                    axs[i, j].set_xticks([])
+                    axs[i, j].set_yticks([])
+                else:
+                    axs[i, j].axis("off")
+        if save:
+            img_name = os.path.basename(self.img_url).split(".")[0]
+            save_name = f"{self.save_dir}/{img_name}/patches.png"
+            os.makedirs(os.path.dirname(save_name), exist_ok=True)
+            plt.savefig(save_name, bbox_inches="tight", dpi=300)
+            plt.show()
+            plt.close(fig)
+        else:
+            plt.show()
+
+    def _plot_union_top_neruons(
+            self, top_k, union_top_neurons, token_idx, token_act, save=False
+    ):
+        print(f"Union of top {top_k} neurons: {union_top_neurons}")
+
+        plt.figure(figsize=(10, 5))
+        plt.plot(token_act, color="black")
+        plt.plot(
+            union_top_neurons,
+            token_act[union_top_neurons],
+            "ro",
+            label="Top neurons",
+            markersize=5,
+        )
+
+        # Annotate feature indices
+        for idx in union_top_neurons:
+            plt.text(
+                idx, token_act[idx] + 0.05, str(idx), fontsize=9, ha="center"
+            )  # Adjust the 0.05 value as needed for spacing
+
+        plt.legend()
+        plt.title(f"token {token_idx} activation")
+
+        if save:
+            img_name = os.path.basename(self.img_url).replace(".jpg", "")
+            save_name = f"{self.save_dir}/{img_name}/activation/{token_idx}.jpg"
+            os.makedirs(os.path.dirname(save_name), exist_ok=True)
+            plt.savefig(save_name, dpi=300)
+            plt.show()
+
+        plt.close()
+
+    def _plot_images(
+            self,
+            dataset_name,
+            images,
+            neuron_idx,
+            labels=None,
+            suptitle=None,
+            top_k=5,
+            save=True,
+    ):
+        images = [img.resize((224, 224)) for img in images]
+        num_cols = min(top_k, 5)
+        num_rows = (top_k + num_cols - 1) // num_cols
+        fig, axes = plt.subplots(
+            num_rows, num_cols, figsize=(4.5 * num_cols, 5 * num_rows)
+        )
+        axes = axes.flatten()  # Flatten the 2D array of axes
+
+        for i in range(top_k):
+            axes[i].imshow(images[i])  # Display the image
+            axes[i].axis("off")  # Hide axes
+            ''' # TODO
+            if labels is not None:
+                class_name = self.class_names[dataset_name][int(labels[i])]
+                axes[i].set_title(f"{labels[i]} {class_name}", fontsize=25)
+            '''
+        # plt.suptitle(suptitle)
+        plt.tight_layout()
+
+        if save:
+            img_name = os.path.basename(self.img_url).replace(".jpg", "")
+            save_name = (
+                f"{self.save_dir}/{img_name}/top_images/{dataset_name}/{neuron_idx}.jpg"
+            )
+            os.makedirs(os.path.dirname(save_name), exist_ok=True)
+            plt.savefig(save_name, dpi=300)
+
+        plt.close()
+
         return fig
 
     def _fig_to_img(self, fig):
@@ -142,55 +192,47 @@ class VisualizeMixin:
         img = img.reshape(canvas.get_width_height()[::-1] + (3,))
         return img
 
-    def _plot_images(
-        self,
-        dataset_name,
-        images,
-        neuron_idx,
-        labels=None,
-        suptitle=None,
-        top_k=5,
-        save=True,
-    ):
-        # Resize to 448x448
-        images = [img.resize((448, 448)) for img in images]
+    def _plot_multiple_images(self, figs, neuron_idx, top_k=5, save=True, seg=False):
 
-        num_cols = min(top_k, 5)
-        num_rows = (top_k + num_cols - 1) // num_cols
-        fig, axes = plt.subplots(num_rows, num_cols, figsize=(4.5 * num_cols, 5 * num_rows))
-        axes = axes.flatten()
+        # Create a new figure to hold all subplots
+        num_plots = len(figs)
+        cols = 1  # Number of columns in the subplot grid
+        rows = (num_plots + cols - 1) // cols  # Calculate rows required
 
-        for i in range(top_k):
-            axes[i].imshow(images[i])
-            axes[i].axis("off")
+        combined_fig = plt.figure(figsize=(20, 12))  # Adjust figsize as needed
+
+        for i, fig in enumerate(figs):
+            ax = combined_fig.add_subplot(rows, cols, i + 1)
+            img = self._fig_to_img(fig)
+            ax.imshow(img)
+            ax.axis("off")
 
         if save:
-            img_name = os.path.basename(self.img_url).split(".")[0]
-            save_name = f"{self.save_dir}/{img_name}/top_images/{dataset_name}/{neuron_idx}.png"
+            img_name = os.path.basename(self.img_url).replace(".jpg", "")
+            if seg:
+                save_name = f"{self.save_dir}/{img_name}/top_images/seg_{neuron_idx}.jpg"
+            else:
+                save_name = f"{self.save_dir}/{img_name}/top_images/{neuron_idx}.jpg"
             os.makedirs(os.path.dirname(save_name), exist_ok=True)
             plt.savefig(save_name, dpi=300)
 
-        plt.close(fig)
-        return fig
+        combined_fig.show()
+        # plt.close(combined_fig)
 
-
-# =====================================================================
-#                               SAE TESTER
-# =====================================================================
 
 class SAETester(VisualizeMixin, UtilMixin):
     def __init__(
-        self,
-        vit,
-        cfg,
-        sae,
-        mean_acts,
-        max_act_images,
-        datasets,
-        class_names,
-        noisy_threshold=0.1,
-        device="cpu",
-        save_dir="./saved_images",
+            self,
+            vit,
+            cfg,
+            sae,
+            mean_acts,
+            max_act_images,
+            datasets,
+            class_names,
+            noisy_threshold=0.1,
+            device="cpu",
+            save_dir="./saved_images",
     ):
         self.vit = vit
         self.cfg = cfg
@@ -203,142 +245,229 @@ class SAETester(VisualizeMixin, UtilMixin):
         self.device = device
         self.save_dir = save_dir
 
-    # -------------------------------------------------------------
-    #                       IMAGE LOADING
-    # -------------------------------------------------------------
-
-    def run(
-        self,
-        highlight_patch_idx,
-        patch_size=16,
-        top_k=5,
-        num_images=5,
-        seg_mask=True,
-        save=True,
-    ):
-        """
-        Full workflow:
-        1) Show patch grid with highlighted patch
-        2) Extract top_k highest-activating SAE neurons for that patch
-        3) Show reference images that maximally activate each neuron
-        4) Optionally show segmentation masks
-        """
-
-        # 1. Show patch grid
-        self.show_patches(
-            highlight_patch_idx=highlight_patch_idx - 1,  # subtract 1 because CLS=0
-            patch_size=patch_size,
-            save=save,
-        )
-
-        # 2. Top neurons for the selected patch token
-        top_neurons = self.get_top_neurons(
-            highlight_patch_idx,
-            top_k=top_k,
-            save=save,
-        )
-
-        # 3–4. Show images and (optionally) segmentation masks
-        self.show_ref_images_of_neuron_indices(
-            top_neurons,
-            top_k=num_images,
-            seg_mask=seg_mask,
-            save=save,
-        )
-
-
-    def show_input_image(self, save=True):
-        """Show (and optionally save) the currently registered input image."""
-        self._plot_input_image(save=save)
-
-    def register_image(self, img_url: str):
+    def register_image(self, img_url: str) -> None:
+        """Load and process an image from a URL or local path."""
         if isinstance(img_url, str):
             image = self._load_image(img_url)
         else:
             image = img_url
-
-        if image.mode != "RGB":
-            image = image.convert("RGB")
-
         self.input_image = image
         self.img_url = img_url
-
-        # Resize to 448×448 because ViT patching expects fixed size
-        resized = image.resize((448, 448))
-
-        processed = self.vit.processor(resized)
+        '''
+        self.processed_image = self.vit.processor(
+            images=image, text="", return_tensors="pt", padding=True
+        )
+        '''
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        processed = self.vit.processor(image)
+        # self.processed_image = {"pixel_values": processed.unsqueeze(0)}
         self.processed_image = processed.unsqueeze(0)
 
-    def _load_image(self, img_url):
-        if img_url.startswith("http"):
+    def _load_image(self, img_url: str) -> Image.Image:
+        """Helper method to load image from URL or local path."""
+        if "https" in img_url:
             response = requests.get(img_url)
             response.raise_for_status()
             return Image.open(BytesIO(response.content))
         return Image.open(img_url)
 
-    # -------------------------------------------------------------
-    #                   CORE ACTIVATION EXTRACTION
-    # -------------------------------------------------------------
+    @property
+    def processed_image(self):
+        return self._processed_image
 
-    def _run_vit_hook(self, image=None):
-        if image is None:
-            inputs = self.processed_image.to(self.device)
-        else:
-            if image.mode != "RGB":
-                image = image.convert("RGB")
-            resized = image.resize((448, 448))
-            inputs = self.vit.processor(resized).unsqueeze(0).to(self.device)
+    @processed_image.setter
+    def processed_image(self, value):
+        self._processed_image = value
 
-        list_of_hook_locations = [(self.cfg.block_layer, self.cfg.module_name)]
-        vit_out, vit_cache_dict = self.vit.run_with_cache(
-            list_of_hook_locations, inputs
+    @property
+    def input_image(self):
+        return self._input_image
+
+    @input_image.setter
+    def input_image(self, value):
+        self._input_image = value
+
+    def show_input_image(self, save=True):
+        self._plot_input_image(save=save)
+
+    def run(
+            self, highlight_patch_idx, patch_size=14, top_k=5, num_images=5, seg_mask=True, save=True
+    ):
+        # idx = 0 is cls token
+        self.show_patches(
+            highlight_patch_idx=highlight_patch_idx - 1, patch_size=patch_size, save=save
         )
-        return vit_cache_dict[(self.cfg.block_layer, self.cfg.module_name)]
+        top_neurons = self.get_top_neurons(highlight_patch_idx, top_k=top_k, save=save)
+        self.show_ref_images_of_neuron_indices(
+            top_neurons, top_k=num_images, seg_mask=True, save=save
+        )
 
-    def _run_sae_hook(self, vit_act):
-        sae_out, sae_cache_dict = self.sae.run_with_cache(vit_act)
-        sae_act = sae_cache_dict["hook_hidden_post"]
-        if sae_act.shape[0] != 1:  # batch dimension mismatch
-            sae_act = sae_act.permute(1, 0, 2)
-        return sae_act[:, 1:, :]  # remove CLS token
+    def show_patches(self, highlight_patch_idx=None, patch_size=14, save=True):
+        if not hasattr(self, "input_image"):
+            assert not hasattr(self, "input_image"), "register image first"
 
-    # -------------------------------------------------------------
-    #                   PATCH DISPLAY & SEG MASK
-    # -------------------------------------------------------------
-
-    def show_patches(self, highlight_patch_idx=None, patch_size=16, save=True):
         patches = self._create_patches(patch=patch_size)
-        self._plot_patches(patches.cpu(), highlight_patch_idx, save)
+        self._plot_patches(patches.cpu().data, highlight_patch_idx=highlight_patch_idx, save=save)
 
-    # -------------------------------------------------------------
-    #                   SEGMENTATION MASK
-    # -------------------------------------------------------------
+    def show_segmentation_mask(self, feat_idx, patch_size=14, mask=None, plot=True, save=True):
+        patches = self._create_patches(patch=patch_size)
+        fig = self._plot_feature_mask(
+            patches.cpu().data, feat_idx, mask=None, plot=plot, save=save
+        )
+        return fig
 
-    def get_segmentation_mask(self, image, feat_idx):
-        if image.mode != "RGB":
+    def get_segmentation_mask(self, image, feat_idx: int):
+
+        if image.mode == "L":
             image = image.convert("RGB")
 
         vit_act = self._run_vit_hook(image)
         sae_act = self._run_sae_hook(vit_act)
         token_act = sae_act[0].detach().cpu().numpy()
+        filtered_mean_act = self._filter_out_nosiy_activation(token_act)
 
-        temp = token_act[:, feat_idx]  # shape [patches]
+        temp = filtered_mean_act[:, feat_idx]
 
-        num_patches = temp.shape[0]
-        grid = int(np.sqrt(num_patches))
-        assert grid * grid == num_patches, "Not a square grid of patches."
-
-        mask = torch.Tensor(temp.reshape(grid, grid)).view(1, 1, grid, grid)
-        mask = torch.nn.functional.interpolate(mask, (image.height, image.width))[0][0].numpy()
+        print('!!!! ', temp.shape)
+        if temp.shape[0] % 16 == 0:
+            mask = torch.Tensor(temp[:, ].reshape(16, 16)).view(1, 1, 16, 16)
+        else:
+            mask = torch.Tensor(temp[1:, ].reshape(16, 16)).view(1, 1, 16, 16)
+        mask = torch.nn.functional.interpolate(mask, (image.height, image.width))[0][
+            0
+        ].numpy()
         mask = (mask - mask.min()) / (mask.max() - mask.min() + 1e-10)
 
-        img_arr = np.array(image)
-        opacity = 30
+        base_opacity = 30
+        image_array = np.array(image)[..., :3]
+        rgba_overlay = np.zeros((mask.shape[0], mask.shape[1], 4), dtype=np.uint8)
+        rgba_overlay[..., :3] = image_array[..., :3]
 
-        rgba = np.zeros((*mask.shape, 4), dtype=np.uint8)
-        rgba[..., :3] = img_arr[..., :3]
-        dark = (img_arr[..., :3] * (opacity / 255)).astype(np.uint8)
-        rgba[mask == 0, :3] = dark[mask == 0]
-        rgba[..., 3] = 255
+        darkened_image = (image_array[..., :3] * (base_opacity / 255)).astype(np.uint8)
+        rgba_overlay[mask == 0, :3] = darkened_image[mask == 0]
+        rgba_overlay[..., 3] = 255  # Fully opaque
 
-        return Image.fromarray(rgba)
+        return Image.fromarray(rgba_overlay)
+
+    def get_top_neurons(self, token_idx=None, top_k=5, plot=True, save=True):
+        if token_idx is None:
+            token_acts, top_neurons, self.sae_act = self._get_img_acts_and_top_neurons(
+                top_k=top_k
+            )
+        else:
+            token_acts, top_neurons, self.sae_act = (
+                self._get_token_acts_and_top_neurons(token_idx=token_idx, top_k=top_k)
+            )
+        if plot:
+            self._plot_union_top_neruons(top_k, top_neurons, token_idx, token_acts, save=save)
+        return top_neurons
+
+    def get_top_images(self, neuron_idx: int, top_k=5, show_seg_mask=False):
+        out_top_images = []
+        for dataset_name in self.max_act_images.keys():
+            images, labels = self._get_max_activating_images_and_labels(
+                neuron_idx,
+                self.datasets[dataset_name],
+                self.max_act_images[dataset_name],
+            )
+            print('!!!! ', labels)
+            print('!!! im !!', images)
+            if show_seg_mask:
+                images = [
+                    self.get_segmentation_mask(img, neuron_idx)
+                    for img in images[:top_k]
+                ]
+            suptitle = f"{dataset_name} - {neuron_idx}"
+            fig = self._plot_images(
+                dataset_name,
+                images,
+                neuron_idx,
+                labels,
+                suptitle=suptitle,
+                top_k=top_k,
+                save=False,
+            )
+            out_top_images.append(fig)
+
+        return out_top_images
+
+    def show_ref_images_of_neuron_indices(
+            self, neuron_indices: list[int], top_k=5, save=False, seg_mask=False
+    ):
+        out_top_images = []
+
+        for neuron_idx in neuron_indices:
+            figs = self.get_top_images(neuron_idx, top_k=top_k, show_seg_mask=False)
+            self._plot_multiple_images(figs, neuron_indices, top_k=top_k, save=True)
+
+            if seg_mask:
+                figs = self.get_top_images(neuron_idx, top_k=top_k, show_seg_mask=True)
+                self._plot_multiple_images(figs, neuron_indices, top_k=top_k, save=True, seg=True)
+
+    def get_activation_distribution(self):
+
+        vit_act = self._run_vit_hook()
+        sae_act = self._run_sae_hook(vit_act)
+        token_act = sae_act[0].detach().cpu().numpy()
+        filtered_mean_act = self._filter_out_nosiy_activation(token_act)
+        self.sae_act = sae_act
+        return filtered_mean_act
+
+    def _get_img_acts_and_top_neurons(self, top_k=5, threshold=0.2):
+
+        vit_act = self._run_vit_hook()
+        sae_act = self._run_sae_hook(vit_act)
+
+        token_act = sae_act[0].detach().cpu().numpy()
+        filtered_mean_act = self._filter_out_nosiy_activation(token_act)
+        token_act = (filtered_mean_act > threshold).sum(0)
+        filtered_mean_act = filtered_mean_act.sum(0)
+        top_neurons = np.argsort(filtered_mean_act)[::-1][:top_k]
+
+        return token_act, top_neurons, sae_act
+
+    def _get_token_acts_and_top_neurons(self, token_idx, top_k=5):
+
+        vit_act = self._run_vit_hook()
+        sae_act = self._run_sae_hook(vit_act)  # [B,patch_number, dSAE]
+
+        token_act = sae_act[0, token_idx, :].detach().cpu().numpy()
+        filtered_mean_act = self._filter_out_nosiy_activation(token_act)
+        top_neurons = np.argsort(filtered_mean_act)[::-1][:top_k]
+
+        return token_act, top_neurons, sae_act
+
+    def _run_vit_hook(self, image=None):
+
+        if image is None:
+            inputs = self.processed_image.to(self.device)
+        else:
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+            inputs = self.vit.processor(image).unsqueeze(0).to(self.device)
+
+        list_of_hook_locations = [(self.cfg.block_layer, self.cfg.module_name)]
+        vit_out, vit_cache_dict = self.vit.run_with_cache(
+            list_of_hook_locations, inputs
+        )
+        vit_act = vit_cache_dict[(self.cfg.block_layer, self.cfg.module_name)]
+        return vit_act
+
+    def _run_sae_hook(self, vit_act):
+        sae_out, sae_cache_dict = self.sae.run_with_cache(vit_act)
+        sae_act = sae_cache_dict["hook_hidden_post"]
+        if sae_act.shape[0] != 1:
+            sae_act = sae_act.permute(1, 0, 2)
+        return sae_act[:, 1:257, :]
+
+    def _filter_out_nosiy_activation(self, features):
+        noisy_features_indices = (
+            (self.mean_acts["mito"] > self.noisy_threshold).nonzero()[0].tolist()
+        )
+        features_copy = deepcopy(features)
+        if len(features_copy.shape) == 1:
+            features_copy[noisy_features_indices] = 0
+        elif len(features_copy.shape) == 2:
+            features_copy[:, noisy_features_indices] = 0
+        return features_copy
