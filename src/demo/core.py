@@ -251,17 +251,23 @@ class SAETester(VisualizeMixin, UtilMixin):
             image = self._load_image(img_url)
         else:
             image = img_url
-        self.input_image = image
-        self.img_url = img_url
-        '''
-        self.processed_image = self.vit.processor(
-            images=image, text="", return_tensors="pt", padding=True
-        )
-        '''
+
+        # ensure PIL Image
+        if not isinstance(image, Image.Image):
+            raise TypeError("Expected PIL.Image")
+
+        # ensure RGB
         if image.mode != "RGB":
             image = image.convert("RGB")
+
+        # resize to ViT-B expected size
+        image = image.resize((224, 224), resample=Image.BICUBIC)
+
+        self.input_image = image
+        self.img_url = img_url
+
+        # ViT processor (expects PIL image)
         processed = self.vit.processor(image)
-        # self.processed_image = {"pixel_values": processed.unsqueeze(0)}
         self.processed_image = processed.unsqueeze(0)
 
     def _load_image(self, img_url: str) -> Image.Image:
