@@ -42,7 +42,7 @@ class UtilMixin:
 
 class VisualizeMixin:
     def _plot_input_image(self, save=True):
-        plt.imshow(self.input_image)
+        plt.imshow(self.input_image, cmap="gray")
         if save:
             # Use the image URL (or its basename) to construct a filename.
             img_name = os.path.basename(self.img_url).split(".")[0]
@@ -329,7 +329,8 @@ class SAETester(VisualizeMixin, UtilMixin):
 
         temp = filtered_mean_act[:, feat_idx]
 
-        print('!!!! ', temp.shape)
+        print('!!! ', temp.shape)
+
         if temp.shape[0] % 16 == 0:
             mask = torch.Tensor(temp[:, ].reshape(16, 16)).view(1, 1, 16, 16)
         else:
@@ -371,8 +372,6 @@ class SAETester(VisualizeMixin, UtilMixin):
                 self.datasets[dataset_name],
                 self.max_act_images[dataset_name],
             )
-            print('!!!! ', labels)
-            print('!!! im !!', images)
             if show_seg_mask:
                 images = [
                     self.get_segmentation_mask(img, neuron_idx)
