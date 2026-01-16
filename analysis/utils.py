@@ -20,6 +20,10 @@ DATASET_INFO = {
         "path": "dataset/acevedo",
         "split": "train",
     },
+    "mito": {
+        "path": "/data/pwojcik/mito_work/dataset_512_sae/",
+        "split": "train",
+    },
     "hehr": {
         "path": "dataset/PKG - AML-Cytomorphology_MLL_Helmholtz_v1",
         "split": "train",
