@@ -85,22 +85,30 @@ class VisualizeMixin:
         return fig
 
     def _plot_patches(self, patches, highlight_patch_idx=None, save=True):
-        fig, axs = plt.subplots(patches.size(1), patches.size(2), figsize=(6, 6))
+        H, W = patches.size(1), patches.size(2)
+
+        # make it big enough: ~1 inch per patch works well
+        fig, axs = plt.subplots(H, W, figsize=(W, H))
         plt.subplots_adjust(wspace=0.01, hspace=0.01)
-        for i in range(patches.size(1)):
-            for j in range(patches.size(2)):
-                patch = patches[0, i, j].permute(1, 2, 0)
-                patch *= torch.tensor(self.vit.processor.image_processor.image_std)
-                patch += torch.tensor(self.vit.processor.image_processor.image_mean)
-                axs[i, j].imshow(patch)
-                if i * patches.size(2) + j == highlight_patch_idx:
+
+        mean = torch.tensor(self.vit.processor.image_processor.image_mean).view(1, 1, 3)
+        std = torch.tensor(self.vit.processor.image_processor.image_std).view(1, 1, 3)
+
+        for i in range(H):
+            for j in range(W):
+                patch = patches[0, i, j].permute(1, 2, 0).detach().cpu()  # (16,16,3)
+
+                # de-normalize + clamp for display
+                patch = (patch * std + mean).clamp(0, 1)
+
+                axs[i, j].imshow(patch.numpy(), interpolation="nearest")
+                axs[i, j].axis("off")
+
+                if highlight_patch_idx is not None and (i * W + j) == highlight_patch_idx:
                     for spine in axs[i, j].spines.values():
                         spine.set_edgecolor("red")
                         spine.set_linewidth(3)
-                    axs[i, j].set_xticks([])
-                    axs[i, j].set_yticks([])
-                else:
-                    axs[i, j].axis("off")
+
         if save:
             img_name = os.path.basename(self.img_url).split(".")[0]
             save_name = f"{self.save_dir}/{img_name}/patches.png"
