@@ -321,6 +321,7 @@ class SAETester(VisualizeMixin, UtilMixin):
             assert not hasattr(self, "input_image"), "register image first"
 
         patches = self._create_patches(patch=patch_size)
+        print('!!! patches ', patches.size)
         self._plot_patches(patches.cpu().data, highlight_patch_idx=highlight_patch_idx, save=save)
 
     def show_segmentation_mask(self, feat_idx, patch_size=14, mask=None, plot=True, save=True):
