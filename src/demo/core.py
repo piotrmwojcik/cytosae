@@ -17,17 +17,14 @@ class UtilMixin:
         img_list = max_activating_image_indices[neuron_idx]
         images = []
         labels = []
-        print(img_list)
         for i in img_list:
             try:
                 images.append(dataset[i.item()]["image"])
-                print(dataset[i.item()]["image"])
                 labels.append(dataset[i.item()]["label"])
             except Exception as e:
                 # images.append(dataset[i.item()]["jpg"])
                 # labels.append(dataset[i.item()]["cls"])
                 images.append(dataset[i.item()]["image"])
-                print(dataset[i.item()]["image"])
                 labels.append(0)
         return images, labels
 
@@ -42,7 +39,7 @@ class UtilMixin:
 
 class VisualizeMixin:
     def _plot_input_image(self, save=True):
-        plt.imshow(self.input_image, cmap="gray")
+        plt.imshow(self.input_image)
         if save:
             # Use the image URL (or its basename) to construct a filename.
             img_name = os.path.basename(self.img_url).split(".")[0]
@@ -85,30 +82,22 @@ class VisualizeMixin:
         return fig
 
     def _plot_patches(self, patches, highlight_patch_idx=None, save=True):
-        H, W = patches.size(1), patches.size(2)
-
-        # make it big enough: ~1 inch per patch works well
-        fig, axs = plt.subplots(H, W, figsize=(W, H))
+        fig, axs = plt.subplots(patches.size(1), patches.size(2), figsize=(6, 6))
         plt.subplots_adjust(wspace=0.01, hspace=0.01)
-
-        mean = torch.tensor(self.vit.processor.image_processor.image_mean).view(1, 1, 3)
-        std = torch.tensor(self.vit.processor.image_processor.image_std).view(1, 1, 3)
-
-        for i in range(H):
-            for j in range(W):
-                patch = patches[0, i, j].permute(1, 2, 0).detach().cpu()  # (16,16,3)
-
-                # de-normalize + clamp for display
-                patch = (patch * std + mean).clamp(0, 1)
-
-                axs[i, j].imshow(patch.numpy(), interpolation="nearest")
-                axs[i, j].axis("off")
-
-                if highlight_patch_idx is not None and (i * W + j) == highlight_patch_idx:
+        for i in range(patches.size(1)):
+            for j in range(patches.size(2)):
+                patch = patches[0, i, j].permute(1, 2, 0)
+                patch *= torch.tensor(self.vit.processor.image_processor.image_std)
+                patch += torch.tensor(self.vit.processor.image_processor.image_mean)
+                axs[i, j].imshow(patch)
+                if i * patches.size(2) + j == highlight_patch_idx:
                     for spine in axs[i, j].spines.values():
                         spine.set_edgecolor("red")
                         spine.set_linewidth(3)
-
+                    axs[i, j].set_xticks([])
+                    axs[i, j].set_yticks([])
+                else:
+                    axs[i, j].axis("off")
         if save:
             img_name = os.path.basename(self.img_url).split(".")[0]
             save_name = f"{self.save_dir}/{img_name}/patches.png"
@@ -259,39 +248,26 @@ class SAETester(VisualizeMixin, UtilMixin):
             image = self._load_image(img_url)
         else:
             image = img_url
-
-        # ensure PIL Image
-        if not isinstance(image, Image.Image):
-            raise TypeError("Expected PIL.Image")
-
-        # ensure RGB
-        if image.mode != "RGB":
-            image = image.convert("RGB")
-
-        # resize to ViT-B expected size
-        image = image.resize((224, 224), resample=Image.BICUBIC)
-
         self.input_image = image
         self.img_url = img_url
-
-        # ViT processor (expects PIL image)
+        '''
+        self.processed_image = self.vit.processor(
+            images=image, text="", return_tensors="pt", padding=True
+        )
+        '''
+        if image.mode != "RGB":
+            image = image.convert("RGB")
         processed = self.vit.processor(image)
+        # self.processed_image = {"pixel_values": processed.unsqueeze(0)}
         self.processed_image = processed.unsqueeze(0)
 
     def _load_image(self, img_url: str) -> Image.Image:
-        """Helper method to load image from URL or local path and resize to 224x224."""
+        """Helper method to load image from URL or local path."""
         if "https" in img_url:
             response = requests.get(img_url)
             response.raise_for_status()
-            img = Image.open(BytesIO(response.content))
-        else:
-            img = Image.open(img_url)
-
-        # ensure consistent mode (important for ViT)
-        img = img.convert("RGB")
-        img = img.resize((224, 224), resample=Image.BICUBIC)
-
-        return img
+            return Image.open(BytesIO(response.content))
+        return Image.open(img_url)
 
     @property
     def processed_image(self):
@@ -329,7 +305,6 @@ class SAETester(VisualizeMixin, UtilMixin):
             assert not hasattr(self, "input_image"), "register image first"
 
         patches = self._create_patches(patch=patch_size)
-        print('!!! patches ', patches.shape)
         self._plot_patches(patches.cpu().data, highlight_patch_idx=highlight_patch_idx, save=save)
 
     def show_segmentation_mask(self, feat_idx, patch_size=14, mask=None, plot=True, save=True):
@@ -350,13 +325,10 @@ class SAETester(VisualizeMixin, UtilMixin):
         filtered_mean_act = self._filter_out_nosiy_activation(token_act)
 
         temp = filtered_mean_act[:, feat_idx]
-
-        print('!!! ', temp.shape)
-
-        if temp.shape[0] % 14 == 0:
-            mask = torch.Tensor(temp[:, ].reshape(14, 14)).view(1, 1, 14, 14)
+        if temp.shape[0] % 16 == 0:
+            mask = torch.Tensor(temp[:, ].reshape(16, 16)).view(1, 1, 16, 16)
         else:
-            mask = torch.Tensor(temp[1:, ].reshape(14, 14)).view(1, 1, 14, 14)
+            mask = torch.Tensor(temp[1:, ].reshape(16, 16)).view(1, 1, 16, 16)
         mask = torch.nn.functional.interpolate(mask, (image.height, image.width))[0][
             0
         ].numpy()
@@ -389,11 +361,13 @@ class SAETester(VisualizeMixin, UtilMixin):
     def get_top_images(self, neuron_idx: int, top_k=5, show_seg_mask=False):
         out_top_images = []
         for dataset_name in self.max_act_images.keys():
+
             images, labels = self._get_max_activating_images_and_labels(
                 neuron_idx,
                 self.datasets[dataset_name],
                 self.max_act_images[dataset_name],
             )
+
             if show_seg_mask:
                 images = [
                     self.get_segmentation_mask(img, neuron_idx)
@@ -484,7 +458,7 @@ class SAETester(VisualizeMixin, UtilMixin):
 
     def _filter_out_nosiy_activation(self, features):
         noisy_features_indices = (
-            (self.mean_acts["mito"] > self.noisy_threshold).nonzero()[0].tolist()
+            (self.mean_acts["mll23"] > self.noisy_threshold).nonzero()[0].tolist()
         )
         features_copy = deepcopy(features)
         if len(features_copy.shape) == 1:
