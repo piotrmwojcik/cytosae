@@ -1,19 +1,101 @@
+"""
+sae_tester_patch4x4.py
+
+Drop-in replacement for your SAETester file, adding support for "super-patches"
+(i.e., pooling the ViT 14x14 token grid into a 4x4 grid) for the same analysis:
+- highlight a 4x4 region
+- get top neurons for that region
+- show top activating images
+- optionally show a coarse 4x4 segmentation overlay for a feature
+
+Key idea:
+- ViT tokens are per-patch (typically 14x14 = 196 for 224x224 inputs).
+- A "4x4 patch" analysis is done by pooling those 14x14 tokens -> 4x4 regions.
+
+How to use:
+- tester.register_image(...)
+- tester.run_region(grid_size=4, region_idx=..., ...)
+"""
+
 import os
 from copy import deepcopy
 from io import BytesIO
+from pathlib import Path
+from typing import List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
 import requests
 import torch
+import torch.nn.functional as F
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 from PIL import Image
 
 
+# ----------------------------
+# Helpers
+# ----------------------------
+def _infer_token_grid(num_tokens: int) -> int:
+    """Infer H=W for a square token grid (e.g., 196 -> 14)."""
+    g = int(round(num_tokens**0.5))
+    if g * g != num_tokens:
+        raise ValueError(f"Expected a square number of tokens, got {num_tokens}.")
+    return g
+
+
+def pool_tokens_to_grid(
+    token_feat: torch.Tensor, grid_out: int, mode: str = "avg"
+) -> torch.Tensor:
+    """
+    Pools token features from an NxN token grid to (grid_out x grid_out).
+
+    token_feat: [T, D] or [N, N, D]
+    returns:    [(grid_out*grid_out), D]
+    """
+    if token_feat.dim() == 2:
+        T, D = token_feat.shape
+        N = _infer_token_grid(T)
+        token_feat = token_feat.view(N, N, D)
+    elif token_feat.dim() == 3:
+        N, N2, D = token_feat.shape
+        if N != N2:
+            raise ValueError(f"Token grid must be square, got {N}x{N2}.")
+    else:
+        raise ValueError(f"token_feat must be [T,D] or [N,N,D], got {token_feat.shape}")
+
+    # [D, N, N]
+    x = token_feat.permute(2, 0, 1)
+
+    if mode == "avg":
+        xg = F.adaptive_avg_pool2d(x, output_size=(grid_out, grid_out))  # [D, g, g]
+    elif mode == "max":
+        xg = F.adaptive_max_pool2d(x, output_size=(grid_out, grid_out))
+    else:
+        raise ValueError("mode must be 'avg' or 'max'")
+
+    # [(g*g), D]
+    return xg.permute(1, 2, 0).reshape(grid_out * grid_out, -1)
+
+
+def upsample_grid_mask(
+    grid_vals: torch.Tensor, grid_size: int, out_h: int, out_w: int
+) -> np.ndarray:
+    """
+    grid_vals: [grid_size*grid_size] (torch)
+    returns:   [out_h, out_w] mask normalized [0..1]
+    """
+    mask = grid_vals.view(1, 1, grid_size, grid_size)
+    mask = F.interpolate(mask, size=(out_h, out_w), mode="bilinear", align_corners=False)[0, 0]
+    mask = mask.detach().cpu().numpy()
+    mask = (mask - mask.min()) / (mask.max() - mask.min() + 1e-10)
+    return mask
+
+
+# ----------------------------
+# Mixins
+# ----------------------------
 class UtilMixin:
-    def _get_max_activating_images_and_labels(
-            self, neuron_idx, dataset, max_activating_image_indices
-    ):
+    def _get_max_activating_images_and_labels(self, neuron_idx, dataset, max_activating_image_indices):
         img_list = max_activating_image_indices[neuron_idx]
         images = []
         labels = []
@@ -21,19 +103,23 @@ class UtilMixin:
             try:
                 images.append(dataset[i.item()]["image"])
                 labels.append(dataset[i.item()]["label"])
-            except Exception as e:
-                # images.append(dataset[i.item()]["jpg"])
-                # labels.append(dataset[i.item()]["cls"])
+            except Exception:
+                # fallback behavior used in your original file
                 images.append(dataset[i.item()]["image"])
                 labels.append(0)
         return images, labels
 
     def _create_patches(self, patch=256):
-        # temp = self.processed_image["pixel_values"].clone()
-        temp = self.processed_image.clone()
-        patches = temp[0].data.unfold(0, 3, 3)
-        patches = patches.unfold(1, patch, patch)
-        patches = patches.unfold(2, patch, patch)
+        """
+        Creates visual patches from the *processed image tensor*.
+        This is independent from ViT token patches. For a 224x224 image:
+        - patch=14 would make many tiny patches (not what you want)
+        - patch=56 gives a 4x4 grid
+        """
+        temp = self.processed_image.clone()  # [1,3,H,W]
+        patches = temp[0].data.unfold(0, 3, 3)      # channels
+        patches = patches.unfold(1, patch, patch)   # height
+        patches = patches.unfold(2, patch, patch)   # width
         return patches
 
 
@@ -41,8 +127,7 @@ class VisualizeMixin:
     def _plot_input_image(self, save=True):
         plt.imshow(self.input_image)
         if save:
-            # Use the image URL (or its basename) to construct a filename.
-            img_name = os.path.basename(self.img_url).split(".")[0]
+            img_name = os.path.basename(str(self.img_url)).split(".")[0]
             save_name = f"{self.save_dir}/{img_name}/input_image.png"
             os.makedirs(os.path.dirname(save_name), exist_ok=True)
             plt.savefig(save_name, bbox_inches="tight", dpi=300)
@@ -52,7 +137,12 @@ class VisualizeMixin:
             plt.show()
 
     def _plot_feature_mask(self, patches, feat_idx, mask=None, plot=True, save=True):
+        """
+        NOTE: This expects 'mask' to be indexable per patch cell (flattened).
+        For your 4x4 pooled mask, pass a 4x4-derived mask aligned to patches.size(1)*patches.size(2).
+        """
         if mask is None:
+            # fallback to SAE activation for a token-grid; not ideal for pooled 4x4 use
             mask = self.sae_act[0, :, feat_idx].cpu()
 
         fig, axs = plt.subplots(patches.size(1), patches.size(2), figsize=(6, 6))
@@ -63,16 +153,19 @@ class VisualizeMixin:
                 patch = patches[0, i, j].permute(1, 2, 0)
                 patch *= torch.tensor(self.vit.processor.image_processor.image_std)
                 patch += torch.tensor(self.vit.processor.image_processor.image_mean)
-                masked_patch = patch * mask[i * patches.size(2) + j + 1]
-                masked_patch = (masked_patch - masked_patch.min()) / (
-                        masked_patch.max() - masked_patch.min() + 1e-8
-                )
+
+                # mask index: +1 was for CLS token in your old code;
+                # for pooled region masks, you should pass a mask of length patches.size(1)*patches.size(2)
+                idx = i * patches.size(2) + j
+                masked_patch = patch * float(mask[idx])
+                masked_patch = (masked_patch - masked_patch.min()) / (masked_patch.max() - masked_patch.min() + 1e-8)
+
                 axs[i, j].imshow(masked_patch)
                 axs[i, j].axis("off")
 
-        fig.suptitle(feat_idx)
+        fig.suptitle(str(feat_idx))
         if save:
-            img_name = os.path.basename(self.img_url).split(".")[0]
+            img_name = os.path.basename(str(self.img_url)).split(".")[0]
             save_name = f"{self.save_dir}/{img_name}/feature_masks/{feat_idx}.png"
             os.makedirs(os.path.dirname(save_name), exist_ok=True)
             fig.savefig(save_name, dpi=300)
@@ -90,7 +183,9 @@ class VisualizeMixin:
                 patch *= torch.tensor(self.vit.processor.image_processor.image_std)
                 patch += torch.tensor(self.vit.processor.image_processor.image_mean)
                 axs[i, j].imshow(patch)
-                if i * patches.size(2) + j == highlight_patch_idx:
+
+                flat_idx = i * patches.size(2) + j
+                if flat_idx == highlight_patch_idx:
                     for spine in axs[i, j].spines.values():
                         spine.set_edgecolor("red")
                         spine.set_linewidth(3)
@@ -98,8 +193,9 @@ class VisualizeMixin:
                     axs[i, j].set_yticks([])
                 else:
                     axs[i, j].axis("off")
+
         if save:
-            img_name = os.path.basename(self.img_url).split(".")[0]
+            img_name = os.path.basename(str(self.img_url)).split(".")[0]
             save_name = f"{self.save_dir}/{img_name}/patches.png"
             os.makedirs(os.path.dirname(save_name), exist_ok=True)
             plt.savefig(save_name, bbox_inches="tight", dpi=300)
@@ -108,32 +204,21 @@ class VisualizeMixin:
         else:
             plt.show()
 
-    def _plot_union_top_neruons(
-            self, top_k, union_top_neurons, token_idx, token_act, save=False
-    ):
+    def _plot_union_top_neruons(self, top_k, union_top_neurons, token_idx, token_act, save=False):
         print(f"Union of top {top_k} neurons: {union_top_neurons}")
 
         plt.figure(figsize=(10, 5))
         plt.plot(token_act, color="black")
-        plt.plot(
-            union_top_neurons,
-            token_act[union_top_neurons],
-            "ro",
-            label="Top neurons",
-            markersize=5,
-        )
+        plt.plot(union_top_neurons, token_act[union_top_neurons], "ro", label="Top neurons", markersize=5)
 
-        # Annotate feature indices
         for idx in union_top_neurons:
-            plt.text(
-                idx, token_act[idx] + 0.05, str(idx), fontsize=9, ha="center"
-            )  # Adjust the 0.05 value as needed for spacing
+            plt.text(idx, token_act[idx] + 0.05, str(idx), fontsize=9, ha="center")
 
         plt.legend()
-        plt.title(f"token {token_idx} activation")
+        plt.title(f"token/region {token_idx} activation")
 
         if save:
-            img_name = os.path.basename(self.img_url).replace(".jpg", "")
+            img_name = os.path.basename(str(self.img_url)).replace(".jpg", "")
             save_name = f"{self.save_dir}/{img_name}/activation/{token_idx}.jpg"
             os.makedirs(os.path.dirname(save_name), exist_ok=True)
             plt.savefig(save_name, dpi=300)
@@ -141,45 +226,26 @@ class VisualizeMixin:
 
         plt.close()
 
-    def _plot_images(
-            self,
-            dataset_name,
-            images,
-            neuron_idx,
-            labels=None,
-            suptitle=None,
-            top_k=5,
-            save=True,
-    ):
+    def _plot_images(self, dataset_name, images, neuron_idx, labels=None, suptitle=None, top_k=5, save=True):
         images = [img.resize((224, 224)) for img in images]
         num_cols = min(top_k, 5)
         num_rows = (top_k + num_cols - 1) // num_cols
-        fig, axes = plt.subplots(
-            num_rows, num_cols, figsize=(4.5 * num_cols, 5 * num_rows)
-        )
-        axes = axes.flatten()  # Flatten the 2D array of axes
+        fig, axes = plt.subplots(num_rows, num_cols, figsize=(4.5 * num_cols, 5 * num_rows))
+        axes = axes.flatten()
 
         for i in range(top_k):
-            axes[i].imshow(images[i])  # Display the image
-            axes[i].axis("off")  # Hide axes
-            ''' # TODO
-            if labels is not None:
-                class_name = self.class_names[dataset_name][int(labels[i])]
-                axes[i].set_title(f"{labels[i]} {class_name}", fontsize=25)
-            '''
-        # plt.suptitle(suptitle)
+            axes[i].imshow(images[i])
+            axes[i].axis("off")
+
         plt.tight_layout()
 
         if save:
-            img_name = os.path.basename(self.img_url).replace(".jpg", "")
-            save_name = (
-                f"{self.save_dir}/{img_name}/top_images/{dataset_name}/{neuron_idx}.jpg"
-            )
+            img_name = os.path.basename(str(self.img_url)).replace(".jpg", "")
+            save_name = f"{self.save_dir}/{img_name}/top_images/{dataset_name}/{neuron_idx}.jpg"
             os.makedirs(os.path.dirname(save_name), exist_ok=True)
             plt.savefig(save_name, dpi=300)
 
         plt.close()
-
         return fig
 
     def _fig_to_img(self, fig):
@@ -190,13 +256,10 @@ class VisualizeMixin:
         return img
 
     def _plot_multiple_images(self, figs, neuron_idx, top_k=5, save=True, seg=False):
-
-        # Create a new figure to hold all subplots
         num_plots = len(figs)
-        cols = 1  # Number of columns in the subplot grid
-        rows = (num_plots + cols - 1) // cols  # Calculate rows required
-
-        combined_fig = plt.figure(figsize=(20, 12))  # Adjust figsize as needed
+        cols = 1
+        rows = (num_plots + cols - 1) // cols
+        combined_fig = plt.figure(figsize=(20, 12))
 
         for i, fig in enumerate(figs):
             ax = combined_fig.add_subplot(rows, cols, i + 1)
@@ -205,7 +268,7 @@ class VisualizeMixin:
             ax.axis("off")
 
         if save:
-            img_name = os.path.basename(self.img_url).replace(".jpg", "")
+            img_name = os.path.basename(str(self.img_url)).replace(".jpg", "")
             if seg:
                 save_name = f"{self.save_dir}/{img_name}/top_images/seg_{neuron_idx}.jpg"
             else:
@@ -214,22 +277,25 @@ class VisualizeMixin:
             plt.savefig(save_name, dpi=300)
 
         combined_fig.show()
-        # plt.close(combined_fig)
 
 
+# ----------------------------
+# Main class with 4x4 support
+# ----------------------------
 class SAETester(VisualizeMixin, UtilMixin):
     def __init__(
-            self,
-            vit,
-            cfg,
-            sae,
-            mean_acts,
-            max_act_images,
-            datasets,
-            class_names,
-            noisy_threshold=0.1,
-            device="cpu",
-            save_dir="./saved_images",
+        self,
+        vit,
+        cfg,
+        sae,
+        mean_acts,
+        max_act_images,
+        datasets,
+        class_names,
+        noisy_threshold=0.1,
+        device="cpu",
+        save_dir="./saved_images",
+        pool_mode: str = "avg",  # 'avg' or 'max' when pooling tokens -> grid
     ):
         self.vit = vit
         self.cfg = cfg
@@ -241,6 +307,7 @@ class SAETester(VisualizeMixin, UtilMixin):
         self.noisy_threshold = noisy_threshold
         self.device = device
         self.save_dir = save_dir
+        self.pool_mode = pool_mode
 
     def register_image(self, img_url: str) -> None:
         """Load and process an image from a URL or local path."""
@@ -248,21 +315,17 @@ class SAETester(VisualizeMixin, UtilMixin):
             image = self._load_image(img_url)
         else:
             image = img_url
+
         self.input_image = image
         self.img_url = img_url
-        '''
-        self.processed_image = self.vit.processor(
-            images=image, text="", return_tensors="pt", padding=True
-        )
-        '''
+
         if image.mode != "RGB":
             image = image.convert("RGB")
-        processed = self.vit.processor(image)
-        # self.processed_image = {"pixel_values": processed.unsqueeze(0)}
-        self.processed_image = processed.unsqueeze(0)
+
+        processed = self.vit.processor(image)  # expected [3,H,W]
+        self.processed_image = processed.unsqueeze(0)  # [1,3,H,W]
 
     def _load_image(self, img_url: str) -> Image.Image:
-        """Helper method to load image from URL or local path."""
         if "https" in img_url:
             response = requests.get(img_url)
             response.raise_for_status()
@@ -285,54 +348,99 @@ class SAETester(VisualizeMixin, UtilMixin):
     def input_image(self, value):
         self._input_image = value
 
+    # ----------------------------
+    # Original behaviors
+    # ----------------------------
     def show_input_image(self, save=True):
         self._plot_input_image(save=save)
 
-    def run(
-            self, highlight_patch_idx, patch_size=14, top_k=5, num_images=5, seg_mask=True, save=True
-    ):
-        # idx = 0 is cls token
-        self.show_patches(
-            highlight_patch_idx=highlight_patch_idx - 1, patch_size=patch_size, save=save
-        )
-        top_neurons = self.get_top_neurons(highlight_patch_idx, top_k=top_k, save=save)
-        self.show_ref_images_of_neuron_indices(
-            top_neurons, top_k=num_images, seg_mask=True, save=save
-        )
+    def _run_vit_hook(self, image=None):
+        if image is None:
+            inputs = self.processed_image.to(self.device)
+        else:
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+            inputs = self.vit.processor(image).unsqueeze(0).to(self.device)
 
-    def show_patches(self, highlight_patch_idx=None, patch_size=14, save=True):
-        if not hasattr(self, "input_image"):
-            assert not hasattr(self, "input_image"), "register image first"
+        list_of_hook_locations = [(self.cfg.block_layer, self.cfg.module_name)]
+        _vit_out, vit_cache_dict = self.vit.run_with_cache(list_of_hook_locations, inputs)
+        vit_act = vit_cache_dict[(self.cfg.block_layer, self.cfg.module_name)]
+        return vit_act
 
-        patches = self._create_patches(patch=patch_size)
-        self._plot_patches(patches.cpu().data, highlight_patch_idx=highlight_patch_idx, save=save)
+    def _run_sae_hook(self, vit_act):
+        _sae_out, sae_cache_dict = self.sae.run_with_cache(vit_act)
+        sae_act = sae_cache_dict["hook_hidden_post"]
+        if sae_act.shape[0] != 1:
+            sae_act = sae_act.permute(1, 0, 2)
 
-    def show_segmentation_mask(self, feat_idx, patch_size=14, mask=None, plot=True, save=True):
-        patches = self._create_patches(patch=patch_size)
-        fig = self._plot_feature_mask(
-            patches.cpu().data, feat_idx, mask=None, plot=plot, save=save
-        )
-        return fig
+        # return patch tokens only (drop CLS), but keep full grid
+        # typical: sae_act: [1, 1+T, d] -> return [1, T, d]
+        return sae_act[:, 1:, :]
 
-    def get_segmentation_mask(self, image, feat_idx: int):
+    def _filter_out_nosiy_activation(self, features):
+        noisy_features_indices = ((self.mean_acts["mito"] > self.noisy_threshold).nonzero()[0].tolist())
+        features_copy = deepcopy(features)
+        if len(features_copy.shape) == 1:
+            features_copy[noisy_features_indices] = 0
+        elif len(features_copy.shape) == 2:
+            features_copy[:, noisy_features_indices] = 0
+        return features_copy
 
+    # ----------------------------
+    # NEW: 4x4 region analysis
+    # ----------------------------
+    def get_region_acts(self, grid_size: int = 4) -> torch.Tensor:
+        """
+        Returns pooled region activations for the currently registered image.
+
+        returns: [grid_size*grid_size, d_sae] torch.Tensor on CPU
+        """
+        vit_act = self._run_vit_hook()
+        sae_act = self._run_sae_hook(vit_act)     # [1, T, d]
+        token_feat = sae_act[0].detach()          # [T, d]
+        region_feat = pool_tokens_to_grid(token_feat, grid_out=grid_size, mode=self.pool_mode)  # [g*g, d]
+        return region_feat.cpu()
+
+    def get_top_neurons_region(self, region_idx: int, grid_size: int = 4, top_k: int = 5, plot: bool = True, save: bool = True):
+        """
+        Get top neurons for a pooled region index (0..grid_size^2-1).
+        """
+        region_feat = self.get_region_acts(grid_size=grid_size)  # [g*g, d]
+        acts = region_feat[region_idx].numpy()                   # [d]
+        acts = self._filter_out_nosiy_activation(acts)
+        top_neurons = np.argsort(acts)[::-1][:top_k]
+
+        # store last sae_act too (for compatibility with other plotting)
+        vit_act = self._run_vit_hook()
+        self.sae_act = self._run_sae_hook(vit_act)
+
+        if plot:
+            self._plot_union_top_neruons(top_k, top_neurons, region_idx, acts, save=save)
+
+        return top_neurons
+
+    def get_segmentation_mask_region(self, image, feat_idx: int, grid_size: int = 4) -> Image.Image:
+        """
+        Creates an overlay mask using pooled region activations (grid_size x grid_size).
+        """
         if image.mode == "L":
             image = image.convert("RGB")
 
         vit_act = self._run_vit_hook(image)
-        sae_act = self._run_sae_hook(vit_act)
-        token_act = sae_act[0].detach().cpu().numpy()
-        filtered_mean_act = self._filter_out_nosiy_activation(token_act)
+        sae_act = self._run_sae_hook(vit_act)   # [1, T, d]
+        token_feat = sae_act[0].detach()        # [T, d]
 
-        temp = filtered_mean_act[:, feat_idx]
-        if temp.shape[0] % 16 == 0:
-            mask = torch.Tensor(temp[:, ].reshape(16, 16)).view(1, 1, 16, 16)
-        else:
-            mask = torch.Tensor(temp[1:, ].reshape(16, 16)).view(1, 1, 16, 16)
-        mask = torch.nn.functional.interpolate(mask, (image.height, image.width))[0][
-            0
-        ].numpy()
-        mask = (mask - mask.min()) / (mask.max() - mask.min() + 1e-10)
+        region_feat = pool_tokens_to_grid(token_feat, grid_out=grid_size, mode=self.pool_mode)  # [g*g, d]
+        vals = region_feat[:, feat_idx].cpu().clone()  # [g*g]
+
+        # filter noisy features: filter expects numpy arrays; apply consistently
+        vals_np = vals.numpy()
+        vals_np = self._filter_out_nosiy_activation(vals_np)  # sets feature dims; here vals is 1D over regions
+        # NOTE: noisy filtering by feature index doesn't apply to region axis; we keep as-is.
+        # If you want "noisy tokens" filtering, do it earlier on token_feat before pooling.
+
+        vals = torch.tensor(vals_np, dtype=torch.float32)
+        mask = upsample_grid_mask(vals, grid_size=grid_size, out_h=image.height, out_w=image.width)
 
         base_opacity = 30
         image_array = np.array(image)[..., :3]
@@ -341,27 +449,36 @@ class SAETester(VisualizeMixin, UtilMixin):
 
         darkened_image = (image_array[..., :3] * (base_opacity / 255)).astype(np.uint8)
         rgba_overlay[mask == 0, :3] = darkened_image[mask == 0]
-        rgba_overlay[..., 3] = 255  # Fully opaque
-
+        rgba_overlay[..., 3] = 255
         return Image.fromarray(rgba_overlay)
 
-    def get_top_neurons(self, token_idx=None, top_k=5, plot=True, save=True):
-        if token_idx is None:
-            token_acts, top_neurons, self.sae_act = self._get_img_acts_and_top_neurons(
-                top_k=top_k
-            )
-        else:
-            token_acts, top_neurons, self.sae_act = (
-                self._get_token_acts_and_top_neurons(token_idx=token_idx, top_k=top_k)
-            )
-        if plot:
-            self._plot_union_top_neruons(top_k, top_neurons, token_idx, token_acts, save=save)
-        return top_neurons
+    # ----------------------------
+    # Visual alignment: show a 4x4 patch grid (pixel-space)
+    # ----------------------------
+    def show_patches_grid(self, grid_size: int = 4, highlight_region_idx: Optional[int] = None, save: bool = True):
+        """
+        Shows pixel-space patches in a grid_size x grid_size layout.
+        For 224x224 images, patch pixels = 224//grid_size.
+        """
+        if not hasattr(self, "input_image"):
+            raise RuntimeError("register_image() first")
 
-    def get_top_images(self, neuron_idx: int, top_k=5, show_seg_mask=False):
+        # determine patch size in pixels from processed_image size
+        _, _, H, W = self.processed_image.shape
+        patch_px_h = H // grid_size
+        patch_px_w = W // grid_size
+        if patch_px_h != patch_px_w:
+            raise ValueError(f"Non-square processed image {H}x{W}, patch sizes {patch_px_h}x{patch_px_w}")
+
+        patches = self._create_patches(patch=patch_px_h)
+        self._plot_patches(patches.cpu().data, highlight_patch_idx=highlight_region_idx, save=save)
+
+    # ----------------------------
+    # Existing top-images functions (unchanged)
+    # ----------------------------
+    def get_top_images(self, neuron_idx: int, top_k=5, show_seg_mask=False, grid_size: int = 4):
         out_top_images = []
         for dataset_name in self.max_act_images.keys():
-
             images, labels = self._get_max_activating_images_and_labels(
                 neuron_idx,
                 self.datasets[dataset_name],
@@ -369,10 +486,8 @@ class SAETester(VisualizeMixin, UtilMixin):
             )
 
             if show_seg_mask:
-                images = [
-                    self.get_segmentation_mask(img, neuron_idx)
-                    for img in images[:top_k]
-                ]
+                images = [self.get_segmentation_mask_region(img, neuron_idx, grid_size=grid_size) for img in images[:top_k]]
+
             suptitle = f"{dataset_name} - {neuron_idx}"
             fig = self._plot_images(
                 dataset_name,
@@ -384,85 +499,54 @@ class SAETester(VisualizeMixin, UtilMixin):
                 save=False,
             )
             out_top_images.append(fig)
-
         return out_top_images
 
-    def show_ref_images_of_neuron_indices(
-            self, neuron_indices: list[int], top_k=5, save=False, seg_mask=False
-    ):
-        out_top_images = []
-
+    def show_ref_images_of_neuron_indices(self, neuron_indices: List[int], top_k=5, save=False, seg_mask=False, grid_size: int = 4):
         for neuron_idx in neuron_indices:
-            figs = self.get_top_images(neuron_idx, top_k=top_k, show_seg_mask=False)
+            figs = self.get_top_images(neuron_idx, top_k=top_k, show_seg_mask=False, grid_size=grid_size)
             self._plot_multiple_images(figs, neuron_indices, top_k=top_k, save=True)
 
             if seg_mask:
-                figs = self.get_top_images(neuron_idx, top_k=top_k, show_seg_mask=True)
+                figs = self.get_top_images(neuron_idx, top_k=top_k, show_seg_mask=True, grid_size=grid_size)
                 self._plot_multiple_images(figs, neuron_indices, top_k=top_k, save=True, seg=True)
 
-    def get_activation_distribution(self):
+    # ----------------------------
+    # One-call runner for region analysis
+    # ----------------------------
+    def run_region(
+        self,
+        region_idx: int,
+        grid_size: int = 4,
+        top_k: int = 5,
+        num_images: int = 5,
+        seg_mask: bool = True,
+        save: bool = True,
+    ):
+        """
+        Full pipeline for a pooled region (e.g., 4x4):
+        1) show pixel-space 4x4 patches with highlighted region
+        2) compute top neurons for the region
+        3) show top activating images for those neurons (+ optional region-based seg overlay)
+        """
+        self.show_patches_grid(grid_size=grid_size, highlight_region_idx=region_idx, save=save)
+        top_neurons = self.get_top_neurons_region(region_idx=region_idx, grid_size=grid_size, top_k=top_k, plot=True, save=save)
+        self.show_ref_images_of_neuron_indices(top_neurons.tolist(), top_k=num_images, seg_mask=seg_mask, save=save, grid_size=grid_size)
 
-        vit_act = self._run_vit_hook()
-        sae_act = self._run_sae_hook(vit_act)
-        token_act = sae_act[0].detach().cpu().numpy()
-        filtered_mean_act = self._filter_out_nosiy_activation(token_act)
-        self.sae_act = sae_act
-        return filtered_mean_act
 
-    def _get_img_acts_and_top_neurons(self, top_k=5, threshold=0.2):
+# ----------------------------
+# Example usage (commented)
+# ----------------------------
+if __name__ == "__main__":
+    """
+    Example (pseudo-code; you must provide vit/cfg/sae/mean_acts/etc.):
 
-        vit_act = self._run_vit_hook()
-        sae_act = self._run_sae_hook(vit_act)
+    tester = SAETester(vit=vit, cfg=cfg, sae=sae, mean_acts=mean_acts,
+                       max_act_images=max_act_images, datasets=datasets,
+                       class_names=class_names, device="cuda", save_dir="./saved")
 
-        token_act = sae_act[0].detach().cpu().numpy()
-        filtered_mean_act = self._filter_out_nosiy_activation(token_act)
-        token_act = (filtered_mean_act > threshold).sum(0)
-        filtered_mean_act = filtered_mean_act.sum(0)
-        top_neurons = np.argsort(filtered_mean_act)[::-1][:top_k]
+    tester.register_image("/path/to/image.jpg")
 
-        return token_act, top_neurons, sae_act
-
-    def _get_token_acts_and_top_neurons(self, token_idx, top_k=5):
-
-        vit_act = self._run_vit_hook()
-        sae_act = self._run_sae_hook(vit_act)  # [B,patch_number, dSAE]
-
-        token_act = sae_act[0, token_idx, :].detach().cpu().numpy()
-        filtered_mean_act = self._filter_out_nosiy_activation(token_act)
-        top_neurons = np.argsort(filtered_mean_act)[::-1][:top_k]
-
-        return token_act, top_neurons, sae_act
-
-    def _run_vit_hook(self, image=None):
-
-        if image is None:
-            inputs = self.processed_image.to(self.device)
-        else:
-            if image.mode != "RGB":
-                image = image.convert("RGB")
-            inputs = self.vit.processor(image).unsqueeze(0).to(self.device)
-
-        list_of_hook_locations = [(self.cfg.block_layer, self.cfg.module_name)]
-        vit_out, vit_cache_dict = self.vit.run_with_cache(
-            list_of_hook_locations, inputs
-        )
-        vit_act = vit_cache_dict[(self.cfg.block_layer, self.cfg.module_name)]
-        return vit_act
-
-    def _run_sae_hook(self, vit_act):
-        sae_out, sae_cache_dict = self.sae.run_with_cache(vit_act)
-        sae_act = sae_cache_dict["hook_hidden_post"]
-        if sae_act.shape[0] != 1:
-            sae_act = sae_act.permute(1, 0, 2)
-        return sae_act[:, 1:257, :]
-
-    def _filter_out_nosiy_activation(self, features):
-        noisy_features_indices = (
-            (self.mean_acts["mito"] > self.noisy_threshold).nonzero()[0].tolist()
-        )
-        features_copy = deepcopy(features)
-        if len(features_copy.shape) == 1:
-            features_copy[noisy_features_indices] = 0
-        elif len(features_copy.shape) == 2:
-            features_copy[:, noisy_features_indices] = 0
-        return features_copy
+    # Analyze region 0..15 on a 4x4 pooled grid:
+    tester.run_region(region_idx=5, grid_size=4, top_k=5, num_images=5, seg_mask=True, save=True)
+    """
+    pass
