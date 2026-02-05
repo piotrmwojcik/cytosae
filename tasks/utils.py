@@ -108,7 +108,7 @@ def get_dino_bloom(modelpath="/content/dinobloom-s.pth",modelname="dinov2_vits14
     # load the original DINOv2 model with the correct architecture and parameters.
     #model = vit_tiny(patch_size=16)
     # load standard DINO ViT-B/16
-    model = torch.hub.load("facebookresearch/dino:main", modelname)
+    model = torch.hub.load('facebookresearch/dinov2', modelname)
 
     # load checkpoint
     pretrained = torch.load(modelpath, map_location="cpu")
