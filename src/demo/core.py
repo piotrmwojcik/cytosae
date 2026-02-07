@@ -311,13 +311,13 @@ class SAETester(VisualizeMixin, UtilMixin):
         return [rr * grid_side + cc for rr in rows for cc in cols]
 
     def run(
-            self, highlight_patch_idx, patch_size=14, top_k=5, num_images=5, seg_mask=True, save=True
+            self, highlight_patch_idx, patch_size=14, top_k=5, num_images=5, seg_mask=True, radius=0, save=True
     ):
         # idx = 0 is cls token
         self.show_patches(
             highlight_patch_idx=highlight_patch_idx - 1,
             patch_size=patch_size,
-            radius=1,  # 3x3 neighborhood
+            radius=0,  # 3x3 neighborhood
             save=save
         )
         top_neurons = self.get_top_neurons(highlight_patch_idx, top_k=top_k, save=save)
@@ -384,14 +384,14 @@ class SAETester(VisualizeMixin, UtilMixin):
 
         return Image.fromarray(rgba_overlay)
 
-    def get_top_neurons(self, token_idx=None, top_k=5, plot=True, save=True):
+    def get_top_neurons(self, token_idx=None, top_k=5, plot=True, radius=0, save=True):
         if token_idx is None:
             token_acts, top_neurons, self.sae_act = self._get_img_acts_and_top_neurons(
                 top_k=top_k
             )
         else:
             token_acts, top_neurons, self.sae_act, _ = (
-                self._get_token_acts_and_top_neurons_grid(token_idx=token_idx, top_k=top_k, radius=1, agg="mean")
+                self._get_token_acts_and_top_neurons_grid(token_idx=token_idx, top_k=top_k, radius=radius, agg="mean")
             )
         if plot:
             self._plot_union_top_neruons(top_k, top_neurons, token_idx, token_acts, save=save)
