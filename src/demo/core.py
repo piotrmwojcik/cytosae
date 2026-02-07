@@ -351,7 +351,7 @@ class SAETester(VisualizeMixin, UtilMixin):
                 top_k=top_k
             )
         else:
-            token_acts, top_neurons, self.sae_act = (
+            token_acts, top_neurons, self.sae_act, _ = (
                 self._get_token_acts_and_top_neurons_grid(token_idx=token_idx, top_k=top_k, radius=1, agg="mean")
             )
         if plot:
