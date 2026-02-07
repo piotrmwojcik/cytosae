@@ -81,16 +81,26 @@ class VisualizeMixin:
             plt.close(fig)
         return fig
 
-    def _plot_patches(self, patches, highlight_patch_idx=None, save=True):
+    def _plot_patches(self, patches, highlight_patch_idx=None, highlight_patch_indices=None, save=True):
         fig, axs = plt.subplots(patches.size(1), patches.size(2), figsize=(6, 6))
         plt.subplots_adjust(wspace=0.01, hspace=0.01)
+
+        # Normalize highlight set
+        highlight_set = set()
+        if highlight_patch_indices is not None:
+            highlight_set = set(int(x) for x in highlight_patch_indices)
+        elif highlight_patch_idx is not None:
+            highlight_set = {int(highlight_patch_idx)}
+
         for i in range(patches.size(1)):
             for j in range(patches.size(2)):
                 patch = patches[0, i, j].permute(1, 2, 0)
                 patch *= torch.tensor(self.vit.processor.image_processor.image_std)
                 patch += torch.tensor(self.vit.processor.image_processor.image_mean)
                 axs[i, j].imshow(patch)
-                if i * patches.size(2) + j == highlight_patch_idx:
+
+                idx = i * patches.size(2) + j
+                if idx in highlight_set:
                     for spine in axs[i, j].spines.values():
                         spine.set_edgecolor("red")
                         spine.set_linewidth(3)
@@ -98,6 +108,7 @@ class VisualizeMixin:
                     axs[i, j].set_yticks([])
                 else:
                     axs[i, j].axis("off")
+
         if save:
             img_name = os.path.basename(self.img_url).split(".")[0]
             save_name = f"{self.save_dir}/{img_name}/patches.png"
@@ -107,6 +118,8 @@ class VisualizeMixin:
             plt.close(fig)
         else:
             plt.show()
+
+        return fig
 
     def _plot_union_top_neruons(
             self, top_k, union_top_neurons, token_idx, token_act, save=False
@@ -288,24 +301,50 @@ class SAETester(VisualizeMixin, UtilMixin):
     def show_input_image(self, save=True):
         self._plot_input_image(save=save)
 
+    def _neighbor_token_indices(self, token_idx: int, radius: int, grid_side: int) -> list[int]:
+        r = token_idx // grid_side
+        c = token_idx % grid_side
+
+        rows = range(max(0, r - radius), min(grid_side, r + radius + 1))
+        cols = range(max(0, c - radius), min(grid_side, c + radius + 1))
+
+        return [rr * grid_side + cc for rr in rows for cc in cols]
+
     def run(
             self, highlight_patch_idx, patch_size=14, top_k=5, num_images=5, seg_mask=True, save=True
     ):
         # idx = 0 is cls token
         self.show_patches(
-            highlight_patch_idx=highlight_patch_idx - 1, patch_size=patch_size, save=save
+            highlight_patch_idx=highlight_patch_idx - 1,
+            patch_size=patch_size,
+            radius=1,  # 3x3 neighborhood
+            save=save
         )
         top_neurons = self.get_top_neurons(highlight_patch_idx, top_k=top_k, save=save)
         self.show_ref_images_of_neuron_indices(
             top_neurons, top_k=num_images, seg_mask=True, save=save
         )
 
-    def show_patches(self, highlight_patch_idx=None, patch_size=14, save=True):
+    def show_patches(self, highlight_patch_idx=None, patch_size=14, radius=0, save=True):
         if not hasattr(self, "input_image"):
             assert not hasattr(self, "input_image"), "register image first"
 
         patches = self._create_patches(patch=patch_size)
-        self._plot_patches(patches.cpu().data, highlight_patch_idx=highlight_patch_idx, save=save)
+
+        grid_side = patches.size(1)  # assumes square grid
+        if highlight_patch_idx is not None and radius > 0:
+            highlight_idxs = self._neighbor_token_indices(highlight_patch_idx, radius, grid_side)
+            self._plot_patches(
+                patches.cpu().data,
+                highlight_patch_indices=highlight_idxs,
+                save=save
+            )
+        else:
+            self._plot_patches(
+                patches.cpu().data,
+                highlight_patch_idx=highlight_patch_idx,
+                save=save
+            )
 
     def show_segmentation_mask(self, feat_idx, patch_size=14, mask=None, plot=True, save=True):
         patches = self._create_patches(patch=patch_size)
