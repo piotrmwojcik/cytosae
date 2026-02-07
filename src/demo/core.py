@@ -352,7 +352,7 @@ class SAETester(VisualizeMixin, UtilMixin):
             )
         else:
             token_acts, top_neurons, self.sae_act = (
-                self._get_token_acts_and_top_neurons(token_idx=token_idx, top_k=top_k)
+                self._get_token_acts_and_top_neurons_grid(token_idx=token_idx, top_k=top_k, radius=1, agg="mean")
             )
         if plot:
             self._plot_union_top_neruons(top_k, top_neurons, token_idx, token_acts, save=save)
@@ -422,12 +422,42 @@ class SAETester(VisualizeMixin, UtilMixin):
 
         return token_act, top_neurons, sae_act
 
+    def _get_token_acts_and_top_neurons_grid(
+            self,
+            token_idx: int,
+            top_k: int = 5,
+            radius: int = 1,  # radius=1 → 3x3 grid
+            agg: str = "mean",  # "mean" or "sum" or "max"
+    ):
+        vit_act = self._run_vit_hook()
+        sae_act = self._run_sae_hook(vit_act)  # [B, N_tokens, dSAE]
+        N = sae_act.shape[1]
+        side = int(np.sqrt(N))
+        assert side * side == N, f"Token count {N} is not a square grid"
+        row = token_idx // side
+        col = token_idx % side
+        rows = np.arange(max(0, row - radius), min(side, row + radius + 1))
+        cols = np.arange(max(0, col - radius), min(side, col + radius + 1))
+
+        neighbor_indices = [r * side + c for r in rows for c in cols]
+        neigh_acts = sae_act[0, neighbor_indices, :].detach().cpu().numpy()
+        if agg == "mean":
+            token_act = neigh_acts.mean(axis=0)
+        elif agg == "sum":
+            token_act = neigh_acts.sum(axis=0)
+        elif agg == "max":
+            token_act = neigh_acts.max(axis=0)
+        else:
+            raise ValueError(f"Unknown aggregation: {agg}")
+        filtered_act = self._filter_out_nosiy_activation(token_act)
+        top_neurons = np.argsort(filtered_act)[::-1][:top_k]
+
+        return token_act, top_neurons, sae_act, neighbor_indices
+
     def _get_token_acts_and_top_neurons(self, token_idx, top_k=5):
 
         vit_act = self._run_vit_hook()
         sae_act = self._run_sae_hook(vit_act)  # [B,patch_number, dSAE]
-
-        print('!!! ', sae_act.shape)
 
         token_act = sae_act[0, token_idx, :].detach().cpu().numpy()
         filtered_mean_act = self._filter_out_nosiy_activation(token_act)
