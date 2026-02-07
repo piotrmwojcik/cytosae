@@ -427,6 +427,8 @@ class SAETester(VisualizeMixin, UtilMixin):
         vit_act = self._run_vit_hook()
         sae_act = self._run_sae_hook(vit_act)  # [B,patch_number, dSAE]
 
+        print('!!! ', sae_act.shape)
+
         token_act = sae_act[0, token_idx, :].detach().cpu().numpy()
         filtered_mean_act = self._filter_out_nosiy_activation(token_act)
         top_neurons = np.argsort(filtered_mean_act)[::-1][:top_k]
